@@ -3,6 +3,7 @@ import axios from "axios";
 import yaml from "js-yaml";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { OpenAPIV3 } from "openapi-types";
 import { AppKeyGenerator } from "../src/auth/get-key";
 import { MCPProxy } from "../src/mcp/proxy";
@@ -20,7 +21,7 @@ function isYamlFile(filePath: string): boolean {
 
 export async function loadOpenApiSpec(specPath?: string): Promise<OpenAPIV3.Document> {
   let rawSpec: string;
-  const defaultSpecPath = "http://localhost:31009/docs/openapi.yaml";
+  const defaultSpecPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "openapi.json");
   const finalSpecPath = specPath || defaultSpecPath;
 
   // Check if the path is a URL

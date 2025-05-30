@@ -67,6 +67,7 @@
     "bin",
     "dist",
     "src",
+    "scripts/openapi.json",
     "README.md"
   ],
   "engines": {
