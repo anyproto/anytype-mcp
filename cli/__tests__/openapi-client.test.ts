@@ -1,6 +1,5 @@
 import axios from "axios";
 import fs from "fs/promises";
-import yaml from "js-yaml";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { loadSpec } from "../openapi-client";
 
@@ -44,7 +43,7 @@ describe("loadSpec", () => {
 
     it("should load a valid OpenAPI spec from local YAML file", async () => {
       // Mock fs.readFile to return a valid YAML spec
-      const yamlSpec = yaml.dump(validOpenApiSpec);
+      const yamlSpec = JSON.stringify(validOpenApiSpec);
       vi.mocked(fs.readFile).mockResolvedValue(yamlSpec);
 
       const result = await loadSpec("./test-spec.yaml");
@@ -92,7 +91,7 @@ describe("loadSpec", () => {
 
     it("should load a valid OpenAPI spec from YAML URL", async () => {
       // Mock axios.get to return a valid YAML spec
-      const yamlSpec = yaml.dump(validOpenApiSpec);
+      const yamlSpec = JSON.stringify(validOpenApiSpec);
       vi.mocked(axios.get).mockResolvedValue({ data: yamlSpec });
 
       const result = await loadSpec("http://example.com/api-spec.yaml");
