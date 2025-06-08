@@ -1,5 +1,4 @@
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import axios from "axios";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -26,17 +25,17 @@ export async function loadOpenApiSpec(specPath?: string): Promise<OpenAPIV3.Docu
     specPath && !specPath.match(/^https?:\/\//) ? path.resolve(process.cwd(), specPath) : defaultFilePath;
   let rawSpec: string;
 
+  //   try {
+  //     const response = await axios.get(defaultUrl);
+  //     rawSpec = typeof response.data === "string" ? response.data : JSON.stringify(response.data);
+  //   } catch (err: any) {
   try {
-    const response = await axios.get(defaultUrl);
-    rawSpec = typeof response.data === "string" ? response.data : JSON.stringify(response.data);
-  } catch (err: any) {
-    try {
-      rawSpec = fs.readFileSync(fallbackFilePath, "utf-8");
-    } catch (fsErr: any) {
-      console.error(`Failed to read OpenAPI spec file at ${fallbackFilePath}: ${fsErr.message}`);
-      process.exit(1);
-    }
+    rawSpec = fs.readFileSync(fallbackFilePath, "utf-8");
+  } catch (fsErr: any) {
+    console.error(`Failed to read OpenAPI spec file at ${fallbackFilePath}: ${fsErr.message}`);
+    process.exit(1);
   }
+  //   }
 
   try {
     return JSON.parse(rawSpec) as OpenAPIV3.Document;
