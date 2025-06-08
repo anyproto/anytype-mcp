@@ -1,0 +1,29 @@
+# Smithery configuration file: https://smithery.ai/docs/build/project-config
+
+startCommand:
+  type: stdio
+  configSchema:
+    # JSON Schema defining the configuration options for the MCP.
+    type: object
+    required:
+      - openapiMcpHeaders
+    properties:
+      baseUrl:
+        type: string
+        description: Optional override for Anytype API base URL
+      openapiMcpHeaders:
+        type: string
+        default: "{}"
+        description: JSON string for HTTP headers, must include Authorization and
+          Anytype-Version
+  exampleConfig:
+    baseUrl: http://localhost:31009
+    openapiMcpHeaders: '{"Authorization":"Bearer at_abcdef", "Anytype-Version":"2025-05-20"}'
+  commandFunction:
+    # A JS function that produces the CLI command based on the given config to start the MCP on stdio.
+    |-
+    (config) => {
+      const env = { OPENAPI_MCP_HEADERS: config.openapiMcpHeaders };
+      if (config.baseUrl) env.BASE_URL = config.baseUrl;
+      return { command: 'anytype-mcp', args: [], env };
+    }

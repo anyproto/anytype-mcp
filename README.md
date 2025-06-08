@@ -1,4 +1,5 @@
 # Anytype MCP Server
+[![smithery badge](https://smithery.ai/badge/@anyproto/anytype-mcp)](https://smithery.ai/server/@anyproto/anytype-mcp)
 
 [![NPM version](https://img.shields.io/npm/v/@anyproto/anytype-mcp.svg)](https://npmjs.org/package/@anyproto/anytype-mcp)
 
