@@ -1,0 +1,23 @@
+startCommand:
+  type: stdio
+  commandFunction: |-
+    (config) => {
+      const env = { OPENAPI_MCP_HEADERS: config.openapiMcpHeaders };
+      if (config.baseUrl) env.BASE_URL = config.baseUrl;
+      return { command: 'anytype-mcp', args: [], env };
+    }
+  configSchema:
+    type: object
+    required:
+      - openapiMcpHeaders
+    properties:
+      openapiMcpHeaders:
+        type: string
+        default: "{}"
+        description: JSON string for HTTP headers, must include Authorization and Anytype-Version
+      baseUrl:
+        type: string
+        description: Optional override for Anytype API base URL
+  exampleConfig:
+    openapiMcpHeaders: '{"Authorization":"Bearer at_abcdef", "Anytype-Version":"2025-05-20"}'
+    baseUrl: http://localhost:31009

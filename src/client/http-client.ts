@@ -198,6 +198,13 @@ export class HttpClient {
           headers,
         );
       }
+      // Handle network errors (e.g., ECONNREFUSED)
+      if (error.code === "ECONNREFUSED" || error.code === "ENOTFOUND" || error.code === "EAI_AGAIN") {
+        throw new HttpClientError("Can't connect to API. Please ensure Anytype is running and reachable.", 503, {
+          code: error.code,
+          message: error.message,
+        });
+      }
       throw error;
     }
   }
