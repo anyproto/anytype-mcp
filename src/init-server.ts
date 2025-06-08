@@ -29,9 +29,7 @@ export async function loadOpenApiSpec(specPath?: string): Promise<OpenAPIV3.Docu
   try {
     const response = await axios.get(defaultUrl);
     rawSpec = typeof response.data === "string" ? response.data : JSON.stringify(response.data);
-    console.error(`Loaded OpenAPI spec from URL: ${defaultUrl}`);
   } catch (err: any) {
-    // console.warn(`Could not load spec from ${defaultUrl}: ${err.code}. Falling back to file system: ${fallbackFilePath}`);
     try {
       rawSpec = fs.readFileSync(fallbackFilePath, "utf-8");
     } catch (fsErr: any) {
@@ -51,7 +49,5 @@ export async function loadOpenApiSpec(specPath?: string): Promise<OpenAPIV3.Docu
 export async function initProxy(specPath: string) {
   const openApiSpec = await loadOpenApiSpec(specPath);
   const proxy = new MCPProxy("Anytype API", openApiSpec);
-
-  // console.error("Connecting to Anytype API...");
   return proxy.connect(new StdioServerTransport());
 }
