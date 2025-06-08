@@ -21,9 +21,9 @@ startCommand:
         description: Optional override for Anytype API base URL
       openapiSpecPath:
         type: string
-        default: "./scripts/openapi.json"
+        default: "/usr/local/scripts/openapi.json"
         description: Path to the OpenAPI spec file for local development
   exampleConfig:
     openapiMcpHeaders: '{"Authorization":"Bearer at_abcdef", "Anytype-Version":"2025-05-20"}'
     baseUrl: http://localhost:31009
-    openapiSpecPath: ./scripts/openapi.json
+    openapiSpecPath: /usr/local/scripts/openapi.json
