@@ -4,6 +4,7 @@ startCommand:
     (config) => {
       const env = { OPENAPI_MCP_HEADERS: config.openapiMcpHeaders };
       if (config.baseUrl) env.BASE_URL = config.baseUrl;
+      if (config.openapiSpecPath) env.ANYTYPE_API_SPEC_FILE_PATH = config.openapiSpecPath;
       return { command: 'anytype-mcp', args: [], env };
     }
   configSchema:
@@ -18,6 +19,11 @@ startCommand:
       baseUrl:
         type: string
         description: Optional override for Anytype API base URL
+      openapiSpecPath:
+        type: string
+        default: "./scripts/openapi.json"
+        description: Path to the OpenAPI spec file for local development
   exampleConfig:
     openapiMcpHeaders: '{"Authorization":"Bearer at_abcdef", "Anytype-Version":"2025-05-20"}'
     baseUrl: http://localhost:31009
+    openapiSpecPath: ./scripts/openapi.json
