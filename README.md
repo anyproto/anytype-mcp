@@ -1,4 +1,5 @@
 # Anytype MCP Server
+[![smithery badge](https://smithery.ai/badge/@anyproto/anytype-mcp)](https://smithery.ai/server/@anyproto/anytype-mcp)
 
 The Anytype MCP Server is a [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server implementation, enabling AI assistants to seamlessly interact with [Anytype's API](https://github.com/anyproto/anytype-api) through natural language.
 
