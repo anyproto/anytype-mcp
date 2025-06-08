@@ -1,28 +1,28 @@
 const { spawn } = require("child_process");
 const fs = require("fs");
 const yaml = require("js-yaml");
-const path = require("path");
 
-// Read smithery.yaml to get openapiSpecPath and commandFunction
 const smitheryConfig = yaml.load(fs.readFileSync("smithery.yaml", "utf8"));
-const openapiSpecPath =
-  smitheryConfig?.startCommand?.configSchema?.properties?.openapiSpecPath?.default || "./scripts/openapi.json";
 
-console.log("Using OpenAPI spec path:", openapiSpecPath);
-
-// Build config for commandFunction
 const config = {
-  openapiMcpHeaders: process.env.OPENAPI_MCP_HEADERS || "{}",
-  baseUrl: process.env.BASE_URL,
-  openapiSpecPath,
+  openapiMcpHeaders: smitheryConfig.startCommand.exampleConfig.openapiMcpHeaders,
+  baseUrl: smitheryConfig.startCommand.exampleConfig.baseUrl,
 };
+console.log("config", config);
 
-// Recreate the commandFunction logic from smithery.yaml
-const env = { OPENAPI_MCP_HEADERS: config.openapiMcpHeaders };
-if (config.baseUrl) env.BASE_URL = config.baseUrl;
-if (config.openapiSpecPath) env.ANYTYPE_API_SPEC_FILE_PATH = config.openapiSpecPath;
-const command = "anytype-mcp";
-const args = [];
+// Parse the commandFunction from smithery.yaml
+const commandFunction = eval(smitheryConfig.startCommand.commandFunction);
+const { command, env } = commandFunction(config);
+
+// Build dockerArgs with env vars
+const dockerArgs = [
+  "run",
+  "--rm",
+  "-i", // Interactive mode for stdin
+  ...Object.entries(env).flatMap(([key, value]) => ["-e", `${key}=${value}`]),
+  command,
+];
+console.log("dockerArgs", dockerArgs);
 
 // MCP protocol: tools/list request (official MCP standard)
 const listToolsRequest = {
@@ -32,9 +32,8 @@ const listToolsRequest = {
   id: 1,
 };
 
-// Use the command and env from smithery.yaml's commandFunction
-const cli = spawn(command, args, {
-  env: { ...process.env, ...env },
+// Use docker run instead of direct command
+const cli = spawn("docker", dockerArgs, {
   stdio: ["pipe", "pipe", "pipe"],
 });
 
