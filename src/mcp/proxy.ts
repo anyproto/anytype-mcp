@@ -103,6 +103,20 @@ export class MCPProxy {
         console.error("Error in tool call", error);
         if (error instanceof HttpClientError) {
           console.error("HttpClientError encountered, returning structured error", error);
+          // Custom handling for API connectivity issues
+          if (error.message.includes("Can't connect to API. Please ensure Anytype is running and reachable.")) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: JSON.stringify({
+                    status: "error",
+                    message: "Can't connect to API. Please ensure Anytype is running and reachable.",
+                  }),
+                },
+              ],
+            };
+          }
           const data = error.data?.response?.data ?? error.data ?? {};
           return {
             content: [
