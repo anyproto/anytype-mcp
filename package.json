@@ -23,7 +23,6 @@
   "bin": {
     "anytype-mcp": "bin/cli.mjs"
   },
-  "module": "scripts/build.ts",
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.8.0",
     "axios": "^1.8.4",
