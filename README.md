@@ -21,9 +21,9 @@ It bridges the gap between AI and Anytype's powerful features by converting Anyt
 ### 1. Get Your API Key
 
 1. Open Anytype
-2. Go to Settings
-3. Navigate to API Keys
-4. Create a new API key
+2. Go to App Settings
+3. Navigate to API Keys section
+4. Click on `Create new` button
 
 <details>
 <summary>Alternative: Get API key via CLI</summary>
@@ -53,6 +53,8 @@ Add the following configuration to your MCP client settings:
   }
 }
 ```
+
+> **Tip:** After creating an API key in Anytype, you can copy a ready-to-use configuration snippet with your API key already filled in from the API Keys section.
 
 <details>
 <summary>Alternative: Global Installation</summary>
