@@ -13,7 +13,6 @@
     "test": "vitest run",
     "test:dev": "vitest watch",
     "build": "tsc -build && node scripts/build-cli.js",
-    "prepare": "npm run build",
     "dev": "tsx watch scripts/start-server.ts",
     "parse-openapi": "tsx scripts/parse-openapi.ts",
     "format": "prettier --write \"src/**/*.{ts,tsx}\" \"scripts/**/*.{ts,tsx}\"",
