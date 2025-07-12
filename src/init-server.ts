@@ -42,9 +42,10 @@ export async function loadOpenApiSpec(specPath?: string): Promise<OpenAPIV3.Docu
 }
 
 export async function initProxy(specPath: string) {
+  console.error("Initializing Anytype MCP Server...");
   const openApiSpec = await loadOpenApiSpec(specPath);
   const proxy = new MCPProxy("Anytype API", openApiSpec);
 
-  console.error("Connecting to Anytype API...");
-  return proxy.connect(new StdioServerTransport());
+  await proxy.connect(new StdioServerTransport());
+  console.error("Anytype MCP Server running on stdio");
 }
