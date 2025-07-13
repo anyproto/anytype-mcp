@@ -56,6 +56,8 @@ Add the following configuration to your MCP client settings after replacing `<YO
 }
 ```
 
+> **Tip:** After creating an API key in Anytype, you can copy that ready-to-use configuration snippet with your API key already filled in from the API Keys section.
+
 #### Claude Code (CLI)
 
 Run this command to add the Anytype MCP server after replacing `<YOUR_API_KEY>` with your actual API key:
@@ -63,8 +65,6 @@ Run this command to add the Anytype MCP server after replacing `<YOUR_API_KEY>` 
 ```bash
 claude mcp add anytype -e OPENAPI_MCP_HEADERS='{"Authorization":"Bearer <YOUR_API_KEY>", "Anytype-Version":"2025-05-20"}' -s user -- npx -y @anyproto/anytype-mcp
 ```
-
-> **Tip:** After creating an API key in Anytype, you can copy a ready-to-use configuration snippet with your API key already filled in from the API Keys section.
 
 <details>
 <summary>Alternative: Global Installation</summary>
