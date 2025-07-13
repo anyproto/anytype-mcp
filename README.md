@@ -40,7 +40,7 @@ npx -y @anyproto/anytype-mcp get-key
 
 #### Claude Desktop, Cursor, Windsurf, Raycast, etc.
 
-Add the following configuration to your MCP client settings:
+Add the following configuration to your MCP client settings after replacing `<YOUR_API_KEY>` with your actual API key:
 
 ```json
 {
@@ -58,7 +58,7 @@ Add the following configuration to your MCP client settings:
 
 #### Claude Code (CLI)
 
-Run this command to add the Anytype MCP server:
+Run this command to add the Anytype MCP server after replacing `<YOUR_API_KEY>` with your actual API key:
 
 ```bash
 claude mcp add anytype -e OPENAPI_MCP_HEADERS='{"Authorization":"Bearer <YOUR_API_KEY>", "Anytype-Version":"2025-05-20"}' -s user -- npx -y @anyproto/anytype-mcp
