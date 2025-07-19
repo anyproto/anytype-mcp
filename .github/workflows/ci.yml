@@ -30,7 +30,7 @@ jobs:
       - name: Run linter
         run: npm run lint
 
-  type-check:
+  typecheck:
     runs-on: ubuntu-latest
 
     steps:
@@ -46,7 +46,7 @@ jobs:
         run: npm install
 
       - name: Run type checks
-        run: npm run type-check
+        run: npm run typecheck
 
   build:
     runs-on: ubuntu-latest
