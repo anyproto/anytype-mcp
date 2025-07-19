@@ -15,9 +15,9 @@
     "build": "tsc -build && node scripts/build-cli.js",
     "dev": "tsx watch scripts/start-server.ts",
     "parse-openapi": "tsx scripts/parse-openapi.ts",
-    "format": "prettier --write \"src/**/*.{ts,tsx}\" \"scripts/**/*.{ts,tsx}\"",
     "lint": "prettier --check \"src/**/*.{ts,tsx}\" \"scripts/**/*.{ts,tsx}\"",
-    "type-check": "tsc --noEmit"
+    "format": "prettier --write \"src/**/*.{ts,tsx}\" \"scripts/**/*.{ts,tsx}\"",
+    "typecheck": "tsc --noEmit"
   },
   "bin": {
     "anytype-mcp": "bin/cli.mjs"
