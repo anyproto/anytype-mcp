@@ -30,7 +30,12 @@ export async function loadOpenApiSpec(specPath?: string): Promise<OpenAPIV3.Docu
     }
   } else {
     const filePath = path.resolve(process.cwd(), finalSpec);
-    rawSpec = fs.readFileSync(filePath, "utf-8");
+    try {
+      rawSpec = fs.readFileSync(filePath, "utf-8");
+    } catch (error: any) {
+      console.error("Failed to read OpenAPI specification file:", error.message || String(error));
+      process.exit(1);
+    }
   }
 
   try {

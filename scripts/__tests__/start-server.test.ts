@@ -191,6 +191,48 @@ describe("main", () => {
   afterEach(() => {
     vi.resetAllMocks();
   });
+
+  it("should run the server when being called without a command", async () => {
+    vi.resetModules();
+    vi.doMock("../../src/init-server", () => ({
+      initProxy: vi.fn().mockResolvedValue(undefined),
+      loadOpenApiSpec: vi.fn().mockResolvedValue(validOpenApiSpec),
+      ValidationError: class ValidationError extends Error {
+        errors: any[];
+        constructor(errors: any[]) {
+          super("OpenAPI validation failed");
+          this.name = "ValidationError";
+          this.errors = errors;
+        }
+      },
+    }));
+
+    const mockExit = vi.spyOn(process, "exit").mockImplementation((() => {}) as any);
+    const { main } = await import("../start-server");
+    await main([]);
+    expect(mockExit).not.toHaveBeenCalled();
+  });
+
+  it("should error on unknown command", async () => {
+    vi.resetModules();
+    vi.doMock("../../src/init-server", () => ({
+      initProxy: vi.fn().mockResolvedValue(undefined),
+      loadOpenApiSpec: vi.fn().mockResolvedValue(validOpenApiSpec),
+      ValidationError: class ValidationError extends Error {
+        errors: any[];
+        constructor(errors: any[]) {
+          super("OpenAPI validation failed");
+          this.name = "ValidationError";
+          this.errors = errors;
+        }
+      },
+    }));
+
+    const mockExit = vi.spyOn(process, "exit").mockImplementation((() => {}) as any);
+    const { main } = await import("../start-server");
+    await main(["unknown"]);
+    expect(mockExit).toHaveBeenCalledWith(1);
+  });
 });
 
 describe("ValidationError", () => {
