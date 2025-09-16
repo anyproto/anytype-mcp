@@ -73,6 +73,11 @@ describe("HttpClient File Upload", () => {
     client = new HttpClient(baseConfig, mockOpenApiSpec);
     // @ts-expect-error - Mock the private api property
     client["api"] = Promise.resolve(mockApiInstance);
+    // Ensure prototype methods are spy-able on the real prototype
+    vi.spyOn(FormData.prototype as any, "append").mockImplementation(() => {
+      return undefined;
+    });
+    vi.spyOn(FormData.prototype as any, "getHeaders").mockReturnValue({});
   });
 
   it("should handle file uploads with FormData", async () => {
