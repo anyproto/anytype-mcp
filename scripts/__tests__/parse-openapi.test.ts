@@ -55,6 +55,9 @@ describe("OpenAPI Tool Conversion", () => {
       const tool = tools[0];
 
       expect(tool.type).toBe("function");
+      if (tool.type !== "function") {
+        throw new Error("Expected OpenAI tool with type 'function'");
+      }
       expect(tool.function.name).toBe("getPet");
       expect(tool.function.description).toBe("Get a pet by ID");
       expect(tool.function.parameters).toEqual({
@@ -151,6 +154,9 @@ describe("OpenAPI Tool Conversion", () => {
       const tool = tools[0];
 
       expect(tool.type).toBe("function");
+      if (tool.type !== "function") {
+        throw new Error("Expected OpenAI tool with type 'function'");
+      }
       expect(tool.function.name).toBe("createPet");
       expect(tool.function.description).toBe("Create a pet");
       expect(tool.function.parameters).toEqual({
