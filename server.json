@@ -1,0 +1,31 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-07-09/server.schema.json",
+  "name": "io.github.anyproto/anytype-mcp",
+  "description": "Official MCP server for Anytype API - your encrypted, local and collaborative wiki.",
+  "status": "active",
+  "repository": {
+    "url": "https://github.com/anyproto/anytype-mcp",
+    "source": "github"
+  },
+  "version": "1.0.6",
+  "packages": [
+    {
+      "registry_type": "npm",
+      "registry_base_url": "https://registry.npmjs.org",
+      "identifier": "@anyproto/anytype-mcp",
+      "version": "1.0.6",
+      "transport": {
+        "type": "stdio"
+      },
+      "environment_variables": [
+        {
+          "description": "JSON string of headers for Anytype API. Example: {\"Authorization\":\"Bearer <YOUR_API_KEY>\", \"Anytype-Version\":\"2025-05-20\"}",
+          "is_required": true,
+          "format": "string",
+          "is_secret": true,
+          "name": "OPENAPI_MCP_HEADERS"
+        }
+      ]
+    }
+  ]
+}

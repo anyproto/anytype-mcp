@@ -1,5 +1,6 @@
 {
   "name": "@anyproto/anytype-mcp",
+  "mcpName": "io.github.anyproto/anytype-mcp",
   "keywords": [
     "anytype",
     "api",
