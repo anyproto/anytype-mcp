@@ -327,11 +327,10 @@ export class OpenAPIToMCPConverter {
       if (!pathItem) continue;
 
       for (const [method, operation] of Object.entries(pathItem)) {
-        // skip "Auth" operations and delete operations, as they shouldn't be called by mcp client
+        // skip "Auth" operations, as they shouldn't be called by mcp client
         if (
           !this.isOperation(method, operation) ||
-          operation.tags?.includes("Auth") ||
-          method.toLowerCase() === "delete"
+          operation.tags?.includes("Auth")
         )
           continue;
 
@@ -360,11 +359,10 @@ export class OpenAPIToMCPConverter {
       if (!pathItem) continue;
 
       for (const [method, operation] of Object.entries(pathItem)) {
-        // skip "Auth" operations and delete operations, as they shouldn't be called by mcp client
+        // skip "Auth" operations, as they shouldn't be called by mcp client
         if (
           !this.isOperation(method, operation) ||
-          operation.tags?.includes("Auth") ||
-          method.toLowerCase() === "delete"
+          operation.tags?.includes("Auth")
         )
           continue;
 
@@ -394,11 +392,10 @@ export class OpenAPIToMCPConverter {
       if (!pathItem) continue;
 
       for (const [method, operation] of Object.entries(pathItem)) {
-        // skip "Auth" operations and delete operations, as they shouldn't be called by mcp client
+        // skip "Auth" operations, as they shouldn't be called by mcp client
         if (
           !this.isOperation(method, operation) ||
-          operation.tags?.includes("Auth") ||
-          method.toLowerCase() === "delete"
+          operation.tags?.includes("Auth")
         )
           continue;
 
