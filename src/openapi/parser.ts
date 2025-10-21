@@ -328,11 +328,7 @@ export class OpenAPIToMCPConverter {
 
       for (const [method, operation] of Object.entries(pathItem)) {
         // skip "Auth" operations, as they shouldn't be called by mcp client
-        if (
-          !this.isOperation(method, operation) ||
-          operation.tags?.includes("Auth")
-        )
-          continue;
+        if (!this.isOperation(method, operation) || operation.tags?.includes("Auth")) continue;
 
         const mcpMethod = this.convertOperationToMCPMethod(operation, method, path);
         if (mcpMethod) {
@@ -360,11 +356,7 @@ export class OpenAPIToMCPConverter {
 
       for (const [method, operation] of Object.entries(pathItem)) {
         // skip "Auth" operations, as they shouldn't be called by mcp client
-        if (
-          !this.isOperation(method, operation) ||
-          operation.tags?.includes("Auth")
-        )
-          continue;
+        if (!this.isOperation(method, operation) || operation.tags?.includes("Auth")) continue;
 
         const parameters = this.convertOperationToJsonSchema(operation, method, path);
         const tool: ChatCompletionTool = {
@@ -393,11 +385,7 @@ export class OpenAPIToMCPConverter {
 
       for (const [method, operation] of Object.entries(pathItem)) {
         // skip "Auth" operations, as they shouldn't be called by mcp client
-        if (
-          !this.isOperation(method, operation) ||
-          operation.tags?.includes("Auth")
-        )
-          continue;
+        if (!this.isOperation(method, operation) || operation.tags?.includes("Auth")) continue;
 
         const parameters = this.convertOperationToJsonSchema(operation, method, path);
         const tool: Tool = {
