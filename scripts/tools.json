@@ -759,6 +759,38 @@
           }
         },
         {
+          "name": "remove-list-object",
+          "description": "Remove object from list\nError Responses:\n400: Bad request\n401: Unauthorized\n404: Not found\n429: Rate limit exceeded\n500: Internal server error",
+          "inputSchema": {
+            "$defs": {},
+            "type": "object",
+            "properties": {
+              "space_id": {
+                "type": "string",
+                "description": "The ID of the space to which the list belongs; must be retrieved from ListSpaces endpoint"
+              },
+              "list_id": {
+                "type": "string",
+                "description": "The ID of the list from which the object will be removed; must be retrieved from SearchSpace endpoint with types: ['collection', 'set']"
+              },
+              "object_id": {
+                "type": "string",
+                "description": "The ID of the object to remove from the list; must be retrieved from SearchSpace or GlobalSearch endpoints or obtained from response context"
+              }
+            },
+            "required": [
+              "space_id",
+              "list_id",
+              "object_id"
+            ]
+          },
+          "outputSchema": {
+            "type": "string",
+            "$defs": {},
+            "description": "Objects removed successfully"
+          }
+        },
+        {
           "name": "get-list-views",
           "description": "Get list views\nError Responses:\n401: Unauthorized\n404: Not found\n500: Internal server error",
           "inputSchema": {
@@ -2352,6 +2384,330 @@
           }
         },
         {
+          "name": "delete-object",
+          "description": "Delete object\nError Responses:\n401: Unauthorized\n403: Forbidden\n404: Resource not found\n410: Resource deleted\n429: Rate limit exceeded\n500: Internal server error",
+          "inputSchema": {
+            "$defs": {},
+            "type": "object",
+            "properties": {
+              "space_id": {
+                "type": "string",
+                "description": "The ID of the space in which the object exists; must be retrieved from ListSpaces endpoint"
+              },
+              "object_id": {
+                "type": "string",
+                "description": "The ID of the object to delete; must be retrieved from ListObjects, SearchSpace or GlobalSearch endpoints or obtained from response context"
+              }
+            },
+            "required": [
+              "space_id",
+              "object_id"
+            ]
+          },
+          "outputSchema": {
+            "type": "object",
+            "properties": {
+              "object": {
+                "type": "object",
+                "description": "The object",
+                "properties": {
+                  "archived": {
+                    "type": "boolean",
+                    "description": "Whether the object is archived"
+                  },
+                  "icon": {
+                    "type": "object",
+                    "description": "The icon of the object",
+                    "properties": {
+                      "emoji": {
+                        "type": "string",
+                        "description": "The emoji of the icon"
+                      },
+                      "format": {
+                        "type": "string",
+                        "description": "The format of the icon",
+                        "enum": [
+                          "emoji"
+                        ]
+                      }
+                    },
+                    "additionalProperties": true
+                  },
+                  "id": {
+                    "type": "string",
+                    "description": "The id of the object"
+                  },
+                  "layout": {
+                    "type": "string",
+                    "description": "The layout of the object"
+                  },
+                  "markdown": {
+                    "type": "string",
+                    "description": "The markdown body of the object"
+                  },
+                  "name": {
+                    "type": "string",
+                    "description": "The name of the object"
+                  },
+                  "object": {
+                    "type": "string",
+                    "description": "The data model of the object"
+                  },
+                  "properties": {
+                    "type": "array",
+                    "description": "The properties of the object",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "description": "The id of the property",
+                          "examples": [
+                            "last_modified_date"
+                          ]
+                        },
+                        "key": {
+                          "type": "string",
+                          "description": "The key of the property",
+                          "examples": [
+                            "last_modified_date"
+                          ]
+                        },
+                        "name": {
+                          "type": "string",
+                          "description": "The name of the property",
+                          "examples": [
+                            "Last modified date"
+                          ]
+                        },
+                        "object": {
+                          "type": "string",
+                          "description": "The data model of the object",
+                          "examples": [
+                            "property"
+                          ]
+                        },
+                        "text": {
+                          "type": "string",
+                          "description": "The text value, if applicable",
+                          "examples": [
+                            "Some text..."
+                          ]
+                        },
+                        "number": {
+                          "type": "number",
+                          "description": "The number value, if applicable",
+                          "examples": [
+                            42
+                          ]
+                        },
+                        "select": {
+                          "type": "string",
+                          "description": "The selected tag id, if applicable",
+                          "examples": [
+                            "tag_id"
+                          ]
+                        },
+                        "multi_select": {
+                          "type": "array",
+                          "description": "The selected tag ids, if applicable",
+                          "items": {
+                            "type": "string"
+                          },
+                          "examples": [
+                            [
+                              "tag_id"
+                            ]
+                          ]
+                        },
+                        "date": {
+                          "type": "string",
+                          "description": "The date value in ISO 8601 format, if applicable",
+                          "examples": [
+                            "2025-02-14T12:34:56Z"
+                          ]
+                        },
+                        "files": {
+                          "type": "array",
+                          "description": "The file ids, if applicable",
+                          "items": {
+                            "type": "string"
+                          },
+                          "examples": [
+                            [
+                              "['file_id']"
+                            ]
+                          ]
+                        },
+                        "checkbox": {
+                          "type": "boolean",
+                          "description": "The checkbox value, if applicable",
+                          "examples": [
+                            true
+                          ]
+                        },
+                        "url": {
+                          "type": "string",
+                          "description": "The url value, if applicable",
+                          "examples": [
+                            "https://example.com"
+                          ]
+                        },
+                        "email": {
+                          "type": "string",
+                          "description": "The email value, if applicable",
+                          "examples": [
+                            "example@example.com"
+                          ]
+                        },
+                        "phone": {
+                          "type": "string",
+                          "description": "The phone number value, if applicable",
+                          "examples": [
+                            "+1234567890"
+                          ]
+                        },
+                        "objects": {
+                          "type": "array",
+                          "description": "The object ids, if applicable",
+                          "items": {
+                            "type": "string"
+                          },
+                          "examples": [
+                            [
+                              "['object_id']"
+                            ]
+                          ]
+                        }
+                      }
+                    }
+                  },
+                  "snippet": {
+                    "type": "string",
+                    "description": "The snippet of the object, especially important for notes as they don't have a name"
+                  },
+                  "space_id": {
+                    "type": "string",
+                    "description": "The id of the space the object is in"
+                  },
+                  "type": {
+                    "type": "object",
+                    "description": "The type of the object",
+                    "properties": {
+                      "archived": {
+                        "type": "boolean",
+                        "description": "Whether the type is archived"
+                      },
+                      "icon": {
+                        "type": "object",
+                        "description": "The icon of the object",
+                        "properties": {
+                          "emoji": {
+                            "type": "string",
+                            "description": "The emoji of the icon"
+                          },
+                          "format": {
+                            "type": "string",
+                            "description": "The format of the icon",
+                            "enum": [
+                              "emoji"
+                            ]
+                          }
+                        },
+                        "additionalProperties": true
+                      },
+                      "id": {
+                        "type": "string",
+                        "description": "The id of the type (which is unique across spaces)"
+                      },
+                      "key": {
+                        "type": "string",
+                        "description": "The key of the type (can be the same across spaces for known types)"
+                      },
+                      "layout": {
+                        "type": "string",
+                        "description": "The layout of the object",
+                        "enum": [
+                          "basic",
+                          "profile",
+                          "action",
+                          "note",
+                          "bookmark",
+                          "set",
+                          "set",
+                          "collection",
+                          "participant"
+                        ]
+                      },
+                      "name": {
+                        "type": "string",
+                        "description": "The name of the type"
+                      },
+                      "object": {
+                        "type": "string",
+                        "description": "The data model of the object"
+                      },
+                      "plural_name": {
+                        "type": "string",
+                        "description": "The plural name of the type"
+                      },
+                      "properties": {
+                        "type": "array",
+                        "description": "The properties linked to the type",
+                        "items": {
+                          "type": "object",
+                          "description": "The property",
+                          "properties": {
+                            "format": {
+                              "type": "string",
+                              "description": "The format of the property used for filtering",
+                              "enum": [
+                                "text",
+                                "number",
+                                "select",
+                                "multi_select",
+                                "date",
+                                "files",
+                                "checkbox",
+                                "url",
+                                "email",
+                                "phone",
+                                "objects"
+                              ]
+                            },
+                            "id": {
+                              "type": "string",
+                              "description": "The id of the property"
+                            },
+                            "key": {
+                              "type": "string",
+                              "description": "The key of the property"
+                            },
+                            "name": {
+                              "type": "string",
+                              "description": "The name of the property"
+                            },
+                            "object": {
+                              "type": "string",
+                              "description": "The data model of the object"
+                            }
+                          },
+                          "additionalProperties": true
+                        }
+                      }
+                    },
+                    "additionalProperties": true
+                  }
+                },
+                "additionalProperties": true
+              }
+            },
+            "additionalProperties": true,
+            "$defs": {},
+            "description": "The created object"
+          }
+        },
+        {
           "name": "get-object",
           "description": "Get object\nError Responses:\n401: Unauthorized\n404: Resource not found\n410: Resource deleted\n500: Internal server error",
           "inputSchema": {
@@ -3332,6 +3688,76 @@
           }
         },
         {
+          "name": "delete-property",
+          "description": "Delete property\nError Responses:\n401: Unauthorized\n403: Forbidden\n404: Resource not found\n410: Resource deleted\n429: Rate limit exceeded\n500: Internal server error",
+          "inputSchema": {
+            "$defs": {},
+            "type": "object",
+            "properties": {
+              "space_id": {
+                "type": "string",
+                "description": "The ID of the space to which the property belongs; must be retrieved from ListSpaces endpoint"
+              },
+              "property_id": {
+                "type": "string",
+                "description": "The ID of the property to delete; must be retrieved from ListProperties endpoint or obtained from response context"
+              }
+            },
+            "required": [
+              "space_id",
+              "property_id"
+            ]
+          },
+          "outputSchema": {
+            "type": "object",
+            "properties": {
+              "property": {
+                "type": "object",
+                "description": "The property",
+                "properties": {
+                  "format": {
+                    "type": "string",
+                    "description": "The format of the property used for filtering",
+                    "enum": [
+                      "text",
+                      "number",
+                      "select",
+                      "multi_select",
+                      "date",
+                      "files",
+                      "checkbox",
+                      "url",
+                      "email",
+                      "phone",
+                      "objects"
+                    ]
+                  },
+                  "id": {
+                    "type": "string",
+                    "description": "The id of the property"
+                  },
+                  "key": {
+                    "type": "string",
+                    "description": "The key of the property"
+                  },
+                  "name": {
+                    "type": "string",
+                    "description": "The name of the property"
+                  },
+                  "object": {
+                    "type": "string",
+                    "description": "The data model of the object"
+                  }
+                },
+                "additionalProperties": true
+              }
+            },
+            "additionalProperties": true,
+            "$defs": {},
+            "description": "The created property"
+          }
+        },
+        {
           "name": "get-property",
           "description": "Get property\nError Responses:\n401: Unauthorized\n404: Resource not found\n410: Resource deleted\n500: Internal server error",
           "inputSchema": {
@@ -3617,6 +4043,80 @@
               "property_id",
               "color",
               "name"
+            ]
+          },
+          "outputSchema": {
+            "type": "object",
+            "properties": {
+              "tag": {
+                "type": "object",
+                "description": "The selected tag value of the property",
+                "properties": {
+                  "color": {
+                    "type": "string",
+                    "description": "The color of the icon",
+                    "enum": [
+                      "grey",
+                      "yellow",
+                      "orange",
+                      "red",
+                      "pink",
+                      "purple",
+                      "blue",
+                      "ice",
+                      "teal",
+                      "lime"
+                    ]
+                  },
+                  "id": {
+                    "type": "string",
+                    "description": "The id of the tag"
+                  },
+                  "key": {
+                    "type": "string",
+                    "description": "The key of the tag"
+                  },
+                  "name": {
+                    "type": "string",
+                    "description": "The name of the tag"
+                  },
+                  "object": {
+                    "type": "string",
+                    "description": "The data model of the object"
+                  }
+                },
+                "additionalProperties": true
+              }
+            },
+            "additionalProperties": true,
+            "$defs": {},
+            "description": "The created tag"
+          }
+        },
+        {
+          "name": "delete-tag",
+          "description": "Delete tag\nError Responses:\n401: Unauthorized\n403: Forbidden\n404: Resource not found\n410: Resource deleted\n429: Rate limit exceeded\n500: Internal server error",
+          "inputSchema": {
+            "$defs": {},
+            "type": "object",
+            "properties": {
+              "space_id": {
+                "type": "string",
+                "description": "The ID of the space to delete the tag from; must be retrieved from ListSpaces endpoint"
+              },
+              "property_id": {
+                "type": "string",
+                "description": "The ID of the property to delete the tag for; must be retrieved from ListProperties endpoint or obtained from response context"
+              },
+              "tag_id": {
+                "type": "string",
+                "description": "The ID of the tag to delete; must be retrieved from ListTags endpoint or obtained from response context"
+              }
+            },
+            "required": [
+              "space_id",
+              "property_id",
+              "tag_id"
             ]
           },
           "outputSchema": {
@@ -4491,6 +4991,144 @@
               "layout",
               "name",
               "plural_name"
+            ]
+          },
+          "outputSchema": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "object",
+                "description": "The type of the object",
+                "properties": {
+                  "archived": {
+                    "type": "boolean",
+                    "description": "Whether the type is archived"
+                  },
+                  "icon": {
+                    "type": "object",
+                    "description": "The icon of the object",
+                    "properties": {
+                      "emoji": {
+                        "type": "string",
+                        "description": "The emoji of the icon"
+                      },
+                      "format": {
+                        "type": "string",
+                        "description": "The format of the icon",
+                        "enum": [
+                          "emoji"
+                        ]
+                      }
+                    },
+                    "additionalProperties": true
+                  },
+                  "id": {
+                    "type": "string",
+                    "description": "The id of the type (which is unique across spaces)"
+                  },
+                  "key": {
+                    "type": "string",
+                    "description": "The key of the type (can be the same across spaces for known types)"
+                  },
+                  "layout": {
+                    "type": "string",
+                    "description": "The layout of the object",
+                    "enum": [
+                      "basic",
+                      "profile",
+                      "action",
+                      "note",
+                      "bookmark",
+                      "set",
+                      "set",
+                      "collection",
+                      "participant"
+                    ]
+                  },
+                  "name": {
+                    "type": "string",
+                    "description": "The name of the type"
+                  },
+                  "object": {
+                    "type": "string",
+                    "description": "The data model of the object"
+                  },
+                  "plural_name": {
+                    "type": "string",
+                    "description": "The plural name of the type"
+                  },
+                  "properties": {
+                    "type": "array",
+                    "description": "The properties linked to the type",
+                    "items": {
+                      "type": "object",
+                      "description": "The property",
+                      "properties": {
+                        "format": {
+                          "type": "string",
+                          "description": "The format of the property used for filtering",
+                          "enum": [
+                            "text",
+                            "number",
+                            "select",
+                            "multi_select",
+                            "date",
+                            "files",
+                            "checkbox",
+                            "url",
+                            "email",
+                            "phone",
+                            "objects"
+                          ]
+                        },
+                        "id": {
+                          "type": "string",
+                          "description": "The id of the property"
+                        },
+                        "key": {
+                          "type": "string",
+                          "description": "The key of the property"
+                        },
+                        "name": {
+                          "type": "string",
+                          "description": "The name of the property"
+                        },
+                        "object": {
+                          "type": "string",
+                          "description": "The data model of the object"
+                        }
+                      },
+                      "additionalProperties": true
+                    }
+                  }
+                },
+                "additionalProperties": true
+              }
+            },
+            "additionalProperties": true,
+            "$defs": {},
+            "description": "The created type"
+          }
+        },
+        {
+          "name": "delete-type",
+          "description": "Delete type\nError Responses:\n401: Unauthorized\n403: Forbidden\n404: Resource not found\n410: Resource deleted\n429: Rate limit exceeded\n500: Internal server error",
+          "inputSchema": {
+            "$defs": {},
+            "type": "object",
+            "properties": {
+              "space_id": {
+                "type": "string",
+                "description": "The ID of the space from which to delete the type; must be retrieved from ListSpaces endpoint"
+              },
+              "type_id": {
+                "type": "string",
+                "description": "The ID of the type to delete; must be retrieved from ListTypes endpoint or obtained from response context"
+              }
+            },
+            "required": [
+              "space_id",
+              "type_id"
             ]
           },
           "outputSchema": {
