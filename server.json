@@ -19,7 +19,7 @@
       },
       "environment_variables": [
         {
-          "description": "JSON string of headers for Anytype API. Example: {\"Authorization\":\"Bearer <YOUR_API_KEY>\", \"Anytype-Version\":\"2025-05-20\"}",
+          "description": "JSON string of headers for Anytype API. Example: {\"Authorization\":\"Bearer <YOUR_API_KEY>\", \"Anytype-Version\":\"2025-11-08\"}",
           "is_required": true,
           "format": "string",
           "is_secret": true,
