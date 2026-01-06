@@ -57,7 +57,7 @@
   "description": "Official MCP server for Anytype API",
   "repository": {
     "type": "git",
-    "url": "git@github.com:anyproto/anytype-mcp.git"
+    "url": "https://github.com/anyproto/anytype-mcp.git"
   },
   "author": "@anyproto",
   "bugs": {
