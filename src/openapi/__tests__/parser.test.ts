@@ -855,6 +855,142 @@ describe("OpenAPIToMCPConverter", () => {
       description: "A schema description",
     });
   });
+
+  describe("Delete Operations Support", () => {
+    const deleteSpec: OpenAPIV3.Document = {
+      openapi: "3.0.0",
+      info: {
+        title: "Delete Test API",
+        version: "1.0.0",
+      },
+      paths: {
+        "/objects/{object_id}": {
+          delete: {
+            operationId: "delete_object",
+            summary: "Delete an object",
+            parameters: [
+              {
+                name: "object_id",
+                in: "path",
+                required: true,
+                description: "The ID of the object to delete",
+                schema: {
+                  type: "string",
+                },
+              },
+            ],
+            responses: {
+              "200": {
+                description: "Object deleted successfully",
+                content: {
+                  "application/json": {
+                    schema: {
+                      type: "object",
+                      properties: {
+                        id: { type: "string" },
+                        deleted: { type: "boolean" },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+        "/lists/{list_id}/objects/{object_id}": {
+          delete: {
+            operationId: "remove_list_object",
+            summary: "Remove object from list",
+            parameters: [
+              {
+                name: "list_id",
+                in: "path",
+                required: true,
+                description: "The ID of the list",
+                schema: { type: "string" },
+              },
+              {
+                name: "object_id",
+                in: "path",
+                required: true,
+                description: "The ID of the object to remove",
+                schema: { type: "string" },
+              },
+            ],
+            responses: {
+              "200": {
+                description: "Object removed from list",
+                content: {
+                  "application/json": {
+                    schema: {
+                      type: "object",
+                      properties: {
+                        success: { type: "boolean" },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+
+    it("should include delete operations in MCP tools", () => {
+      const converter = new OpenAPIToMCPConverter(deleteSpec);
+      const { tools, openApiLookup } = converter.convertToMCPTools();
+
+      expect(tools).toHaveProperty("API");
+      expect(tools.API.methods).toHaveLength(2);
+
+      const deleteObjectMethod = tools.API.methods.find((m) => m.name === "delete-object");
+      const removeListObjectMethod = tools.API.methods.find((m) => m.name === "remove-list-object");
+
+      expect(deleteObjectMethod).toBeDefined();
+      expect(removeListObjectMethod).toBeDefined();
+
+      // Check that delete operations are in the lookup
+      expect(openApiLookup).toHaveProperty("API-delete-object");
+      expect(openApiLookup).toHaveProperty("API-remove-list-object");
+
+      // Verify delete object method parameters
+      const deleteParams = getParamsFromSchema(deleteObjectMethod!);
+      expect(deleteParams).toContainEqual({
+        name: "object_id",
+        type: "string",
+        description: "The ID of the object to delete",
+        optional: false,
+      });
+
+      // Verify remove list object method parameters
+      const removeParams = getParamsFromSchema(removeListObjectMethod!);
+      expect(removeParams).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            name: "list_id",
+            type: "string",
+            description: "The ID of the list",
+            optional: false,
+          }),
+          expect.objectContaining({
+            name: "object_id",
+            type: "string",
+            description: "The ID of the object to remove",
+            optional: false,
+          }),
+        ]),
+      );
+    });
+
+    it("should handle delete operations with proper error responses", () => {
+      const converter = new OpenAPIToMCPConverter(deleteSpec);
+      const { tools } = converter.convertToMCPTools();
+
+      const deleteObjectMethod = tools.API.methods.find((m) => m.name === "delete-object");
+      expect(deleteObjectMethod?.description).toContain("Delete an object");
+    });
+  });
 });
 
 // Additional complex test scenarios as a table test
