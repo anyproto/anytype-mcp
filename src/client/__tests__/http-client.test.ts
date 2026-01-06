@@ -5,16 +5,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HttpClient } from "../http-client";
 
 // Mock the OpenAPIClientAxios initialization
+const mockApi = {
+  getPet: vi.fn(),
+  testOperation: vi.fn(),
+  complexOperation: vi.fn(),
+};
+
 vi.mock("openapi-client-axios", () => {
-  const mockApi = {
-    getPet: vi.fn(),
-    testOperation: vi.fn(),
-    complexOperation: vi.fn(),
-  };
+  const MockOpenAPIClientAxios = vi.fn(function (this: any) {
+    this.init = vi.fn().mockResolvedValue(mockApi);
+    return this;
+  });
   return {
-    default: vi.fn().mockImplementation(() => ({
-      init: vi.fn().mockResolvedValue(mockApi),
-    })),
+    default: MockOpenAPIClientAxios,
   };
 });
 
@@ -473,12 +476,13 @@ describe("HttpClient", () => {
       testOperation: vi.fn().mockRejectedValue(errorResponse),
     };
 
-    // Mock the OpenAPIClientAxios initialization
-    const MockOpenAPIClientAxios = vi.fn().mockImplementation(() => ({
-      init: () => Promise.resolve(mockAxiosInstance),
-    }));
+    // Mock the OpenAPIClientAxios initialization - use function keyword for constructor support
+    const MockOpenAPIClientAxios = vi.fn(function (this: any) {
+      this.init = vi.fn().mockResolvedValue(mockAxiosInstance);
+      return this;
+    });
 
-    vi.mocked(OpenAPIClientAxios).mockImplementation(() => MockOpenAPIClientAxios());
+    vi.mocked(OpenAPIClientAxios).mockImplementation(MockOpenAPIClientAxios as any);
 
     const client = new HttpClient(mockConfig, mockOpenApiSpec);
     const operation = mockOpenApiSpec.paths["/test"]?.post;
@@ -510,11 +514,13 @@ describe("HttpClient", () => {
       }),
     };
 
-    const MockOpenAPIClientAxios = vi.fn().mockImplementation(() => ({
-      init: () => Promise.resolve(mockAxiosInstance),
-    }));
+    // Mock the OpenAPIClientAxios initialization - use function keyword for constructor support
+    const MockOpenAPIClientAxios = vi.fn(function (this: any) {
+      this.init = vi.fn().mockResolvedValue(mockAxiosInstance);
+      return this;
+    });
 
-    vi.mocked(OpenAPIClientAxios).mockImplementation(() => MockOpenAPIClientAxios());
+    vi.mocked(OpenAPIClientAxios).mockImplementation(MockOpenAPIClientAxios as any);
 
     const client = new HttpClient(mockConfig, mockOpenApiSpec);
     const operation = mockOpenApiSpec.paths["/test"]?.post;
