@@ -25,7 +25,7 @@
     "anytype-mcp": "bin/cli.mjs"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "1.25.1",
+    "@modelcontextprotocol/sdk": "1.25.2",
     "axios": "1.13.2",
     "form-data": "4.0.5",
     "mustache": "4.2.0",
