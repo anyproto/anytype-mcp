@@ -77,6 +77,8 @@ export class OpenAPIToMCPConverter {
 
       // If already cached, return immediately with description
       if (this.schemaCache[ref]) {
+        // Scan cached schema for $refs to track them for this operation's $defs
+        this.trackRefsInSchema(this.schemaCache[ref]);
         return this.schemaCache[ref];
       }
 
@@ -458,6 +460,56 @@ export class OpenAPIToMCPConverter {
    */
   private clearReferencedSchemas(): void {
     this.referencedSchemas.clear();
+  }
+
+  /**
+   * Recursively scan a schema for $ref to #/$defs/X and track them.
+   * This is needed when returning cached schemas, as their internal
+   * refs need to be tracked for the current operation's $defs.
+   */
+  private trackRefsInSchema(schema: IJsonSchema): void {
+    if (!schema || typeof schema !== "object") return;
+
+    // Check if this schema has a $ref to $defs
+    if (schema.$ref && typeof schema.$ref === "string" && schema.$ref.startsWith("#/$defs/")) {
+      const schemaName = schema.$ref.replace("#/$defs/", "");
+      this.referencedSchemas.add(schemaName);
+    }
+
+    // Recursively check properties
+    if (schema.properties) {
+      for (const prop of Object.values(schema.properties)) {
+        if (prop && typeof prop === "object") {
+          this.trackRefsInSchema(prop as IJsonSchema);
+        }
+      }
+    }
+
+    // Check items (for arrays)
+    if (schema.items) {
+      if (Array.isArray(schema.items)) {
+        for (const item of schema.items) {
+          this.trackRefsInSchema(item as IJsonSchema);
+        }
+      } else {
+        this.trackRefsInSchema(schema.items as IJsonSchema);
+      }
+    }
+
+    // Check allOf, anyOf, oneOf
+    for (const key of ["allOf", "anyOf", "oneOf"] as const) {
+      const arr = schema[key];
+      if (Array.isArray(arr)) {
+        for (const item of arr) {
+          this.trackRefsInSchema(item as IJsonSchema);
+        }
+      }
+    }
+
+    // Check additionalProperties
+    if (schema.additionalProperties && typeof schema.additionalProperties === "object") {
+      this.trackRefsInSchema(schema.additionalProperties as IJsonSchema);
+    }
   }
   /**
    * Helper method to convert an operation to a JSON Schema for parameters
