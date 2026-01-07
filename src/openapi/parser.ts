@@ -56,6 +56,10 @@ export class OpenAPIToMCPConverter {
   ): IJsonSchema {
     if ("$ref" in schema) {
       const ref = schema.$ref;
+      // Skip FilterExpression ref entirely as filters are excluded from tool specs
+      if (ref === "#/components/schemas/FilterExpression") {
+        return {};
+      }
       if (!resolveRefs) {
         if (ref.startsWith("#/components/schemas/")) {
           return {
@@ -156,7 +160,7 @@ export class OpenAPIToMCPConverter {
     if (schema.oneOf) {
       // Special handling for icon schema - only keep emoji definition
       const hasEmojiIcon = schema.oneOf.some(
-        (def) => typeof def === "object" && "$ref" in def && def.$ref === "#/components/schemas/apimodel.EmojiIcon",
+        (def) => typeof def === "object" && "$ref" in def && def.$ref === "#/components/schemas/EmojiIcon",
       );
 
       if (hasEmojiIcon) {
@@ -456,10 +460,12 @@ export class OpenAPIToMCPConverter {
           );
           if (bodySchema.type === "object" && bodySchema.properties) {
             for (const [name, propSchema] of Object.entries(bodySchema.properties)) {
+              // Exclude "filters" from the schema for now
+              if (name === "filters") continue;
               schema.properties![name] = propSchema;
             }
             if (bodySchema.required) {
-              schema.required!.push(...bodySchema.required);
+              schema.required!.push(...bodySchema.required.filter((r) => r !== "filters")); // Exclude "filters" from the schema for now
             }
           }
         }
@@ -583,10 +589,12 @@ export class OpenAPIToMCPConverter {
           );
           if (formSchema.type === "object" && formSchema.properties) {
             for (const [name, propSchema] of Object.entries(formSchema.properties)) {
+              // Exclude "filters" from the schema for now
+              if (name === "filters") continue;
               inputSchema.properties![name] = propSchema;
             }
             if (formSchema.required) {
-              inputSchema.required!.push(...formSchema.required!);
+              inputSchema.required!.push(...formSchema.required!.filter((r) => r !== "filters")); // Exclude "filters" from the schema for now
             }
           }
         }
@@ -600,10 +608,12 @@ export class OpenAPIToMCPConverter {
           // Merge body schema into the inputSchema's properties
           if (bodySchema.type === "object" && bodySchema.properties) {
             for (const [name, propSchema] of Object.entries(bodySchema.properties)) {
+              // Exclude "filters" from the schema for now
+              if (name === "filters") continue;
               inputSchema.properties![name] = propSchema;
             }
             if (bodySchema.required) {
-              inputSchema.required!.push(...bodySchema.required!);
+              inputSchema.required!.push(...bodySchema.required!.filter((r) => r !== "filters")); // Exclude "filters" from the schema for now
             }
           } else {
             // If the request body is not an object, just put it under "body"
