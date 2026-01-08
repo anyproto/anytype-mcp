@@ -551,7 +551,25 @@
       },
       "FilterCondition": {
         "description": "The filter condition",
-        "enum": ["empty", "nempty"],
+        "enum": [
+          "equal",
+          "not_equal",
+          "greater",
+          "less",
+          "greater_or_equal",
+          "less_or _equal",
+          "like",
+          "not_like",
+          "in",
+          "not_in",
+          "empty",
+          "not_empty",
+          "all_in",
+          "not_all_in",
+          "exact_in",
+          "not_exact_in",
+          "exists"
+        ],
         "example": "empty",
         "type": "string",
         "x-enum-comments": {
