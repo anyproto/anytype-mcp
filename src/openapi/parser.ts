@@ -56,9 +56,106 @@ export class OpenAPIToMCPConverter {
   ): IJsonSchema {
     if ("$ref" in schema) {
       const ref = schema.$ref;
-      // TODO: Add support for filters
+      // FilterExpression - flatten the complex oneOf into an agent-friendly schema
       if (ref === "#/components/schemas/FilterExpression") {
-        return {};
+        return {
+          type: "object",
+          description: "Filter expression with AND/OR logic. Use 'conditions' for filter criteria.",
+          properties: {
+            operator: {
+              type: "string",
+              enum: ["and", "or"],
+              description: "Logical operator to combine conditions (default: and)",
+            },
+            conditions: {
+              type: "array",
+              description: "Array of filter conditions to apply",
+              items: {
+                type: "object",
+                properties: {
+                  property_key: {
+                    type: "string",
+                    description: "The property key to filter on (e.g., 'done', 'created_date', 'links')",
+                  },
+                  condition: {
+                    type: "string",
+                    enum: [
+                      "eq",
+                      "ne",
+                      "gt",
+                      "gte",
+                      "lt",
+                      "lte",
+                      "empty",
+                      "nempty",
+                      "in",
+                      "nin",
+                      "contains",
+                      "ncontains",
+                      "all",
+                    ],
+                    description:
+                      "Filter condition: eq/ne (equals), gt/gte/lt/lte (comparison), empty/nempty (null check), in/nin/all (arrays), contains/ncontains (text)",
+                  },
+                  // Type-specific value fields - use the one matching your property type
+                  text: {
+                    type: "string",
+                    description: "Text value for text property filters",
+                  },
+                  number: {
+                    type: "number",
+                    description: "Number value for number property filters",
+                  },
+                  checkbox: {
+                    type: "boolean",
+                    description: "Boolean value for checkbox property filters",
+                  },
+                  date: {
+                    type: "string",
+                    description: "ISO 8601 date for date property filters (e.g., '2026-01-29T00:00:00Z')",
+                  },
+                  select: {
+                    type: "string",
+                    description: "Tag ID for single-select property filters",
+                  },
+                  multi_select: {
+                    type: "array",
+                    items: { type: "string" },
+                    description: "Array of tag IDs for multi-select property filters",
+                  },
+                  objects: {
+                    type: "array",
+                    items: { type: "string" },
+                    description: "Array of object IDs for relation property filters",
+                  },
+                  url: {
+                    type: "string",
+                    description: "URL value for URL property filters",
+                  },
+                  email: {
+                    type: "string",
+                    description: "Email value for email property filters",
+                  },
+                  phone: {
+                    type: "string",
+                    description: "Phone value for phone property filters",
+                  },
+                },
+                required: ["property_key", "condition"],
+              },
+            },
+            filters: {
+              type: "array",
+              description: "Nested filter expressions for complex AND/OR logic (optional)",
+              items: {
+                type: "object",
+                additionalProperties: true,
+                description: "Nested FilterExpression (same structure as parent)",
+              },
+            },
+          },
+          additionalProperties: false,
+        };
       }
       if (!resolveRefs) {
         if (ref.startsWith("#/components/schemas/")) {
@@ -460,12 +557,10 @@ export class OpenAPIToMCPConverter {
           );
           if (bodySchema.type === "object" && bodySchema.properties) {
             for (const [name, propSchema] of Object.entries(bodySchema.properties)) {
-              // TODO: Add support for filters
-              if (name === "filters") continue;
               schema.properties![name] = propSchema;
             }
             if (bodySchema.required) {
-              schema.required!.push(...bodySchema.required.filter((r) => r !== "filters"));
+              schema.required!.push(...bodySchema.required);
             }
           }
         }
@@ -589,12 +684,10 @@ export class OpenAPIToMCPConverter {
           );
           if (formSchema.type === "object" && formSchema.properties) {
             for (const [name, propSchema] of Object.entries(formSchema.properties)) {
-              // TODO: Add support for filters
-              if (name === "filters") continue;
               inputSchema.properties![name] = propSchema;
             }
             if (formSchema.required) {
-              inputSchema.required!.push(...formSchema.required!.filter((r) => r !== "filters"));
+              inputSchema.required!.push(...formSchema.required!);
             }
           }
         }
@@ -608,12 +701,10 @@ export class OpenAPIToMCPConverter {
           // Merge body schema into the inputSchema's properties
           if (bodySchema.type === "object" && bodySchema.properties) {
             for (const [name, propSchema] of Object.entries(bodySchema.properties)) {
-              // TODO: Add support for filters
-              if (name === "filters") continue;
               inputSchema.properties![name] = propSchema;
             }
             if (bodySchema.required) {
-              inputSchema.required!.push(...bodySchema.required!.filter((r) => r !== "filters"));
+              inputSchema.required!.push(...bodySchema.required!);
             }
           } else {
             // If the request body is not an object, just put it under "body"
