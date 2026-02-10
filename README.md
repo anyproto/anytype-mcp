@@ -94,9 +94,9 @@ npm install -g @anyproto/anytype-mcp
 
 </details>
 
-### Custom API Endpoint
+### Custom API Base URL
 
-By default, the server connects to `http://127.0.0.1:31009`. For `anytype-cli` (port `31012`) or other custom endpoints, set `ANYTYPE_API_ENDPOINT`:
+By default, the server connects to `http://127.0.0.1:31009`. For `anytype-cli` (port `31012`) or other custom base URLs, set `ANYTYPE_API_BASE_URL`:
 
 <details>
 <summary>Example Configuration</summary>
@@ -109,7 +109,7 @@ By default, the server connects to `http://127.0.0.1:31009`. For `anytype-cli` (
       "command": "npx",
       "args": ["-y", "@anyproto/anytype-mcp"],
       "env": {
-        "ANYTYPE_API_ENDPOINT": "http://localhost:31012",
+        "ANYTYPE_API_BASE_URL": "http://localhost:31012",
         "OPENAPI_MCP_HEADERS": "{\"Authorization\":\"Bearer <YOUR_API_KEY>\", \"Anytype-Version\":\"2025-11-08\"}"
       }
     }
@@ -120,7 +120,7 @@ By default, the server connects to `http://127.0.0.1:31009`. For `anytype-cli` (
 **Claude Code (CLI):**
 ```bash
 claude mcp add anytype \
-  -e ANYTYPE_API_ENDPOINT='http://localhost:31012' \
+  -e ANYTYPE_API_BASE_URL='http://localhost:31012' \
   -e OPENAPI_MCP_HEADERS='{"Authorization":"Bearer <YOUR_API_KEY>", "Anytype-Version":"2025-11-08"}' \
   -s user -- npx -y @anyproto/anytype-mcp
 ```
