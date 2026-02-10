@@ -94,12 +94,14 @@ npm install -g @anyproto/anytype-mcp
 
 </details>
 
-## Advanced Configuration
-
 ### Custom API Endpoint
 
-By default, the MCP server connects to `http://127.0.0.1:31009`. If your Anytype API is running on a different endpoint (e.g., when using `anytype-cli` which defaults to port `31012`), you can configure it using the `ANYTYPE_API_ENDPOINT` environment variable:
+By default, the server connects to `http://127.0.0.1:31009`. For `anytype-cli` (port `31012`) or other custom endpoints, set `ANYTYPE_API_ENDPOINT`:
 
+<details>
+<summary>Example Configuration</summary>
+
+**MCP Client (Claude Desktop, Cursor, etc.):**
 ```json
 {
   "mcpServers": {
@@ -115,16 +117,15 @@ By default, the MCP server connects to `http://127.0.0.1:31009`. If your Anytype
 }
 ```
 
-For Claude Code (CLI):
-
+**Claude Code (CLI):**
 ```bash
-claude mcp add anytype -e ANYTYPE_API_ENDPOINT='http://localhost:31012' -e OPENAPI_MCP_HEADERS='{"Authorization":"Bearer <YOUR_API_KEY>", "Anytype-Version":"2025-11-08"}' -s user -- npx -y @anyproto/anytype-mcp
+claude mcp add anytype \
+  -e ANYTYPE_API_ENDPOINT='http://localhost:31012' \
+  -e OPENAPI_MCP_HEADERS='{"Authorization":"Bearer <YOUR_API_KEY>", "Anytype-Version":"2025-11-08"}' \
+  -s user -- npx -y @anyproto/anytype-mcp
 ```
 
-The base URL is determined using this priority order:
-1. `ANYTYPE_API_ENDPOINT` environment variable (if set and valid)
-2. OpenAPI spec's `servers[0].url` (if available)
-3. Default fallback: `http://127.0.0.1:31009`
+</details>
 
 ## Example Interactions
 
