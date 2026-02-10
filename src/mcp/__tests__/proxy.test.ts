@@ -217,7 +217,7 @@ describe("MCPProxy", () => {
         "X-Custom-Header": "test",
       });
 
-      const proxy = new MCPProxy("test-proxy", mockOpenApiSpec);
+      new MCPProxy("test-proxy", mockOpenApiSpec);
       expect(HttpClient).toHaveBeenCalledWith(
         expect.objectContaining({
           headers: {
@@ -232,7 +232,7 @@ describe("MCPProxy", () => {
     it("should return empty object when env var is not set", () => {
       delete process.env.OPENAPI_MCP_HEADERS;
 
-      const proxy = new MCPProxy("test-proxy", mockOpenApiSpec);
+      new MCPProxy("test-proxy", mockOpenApiSpec);
       expect(HttpClient).toHaveBeenCalledWith(
         expect.objectContaining({
           headers: {},
@@ -245,7 +245,7 @@ describe("MCPProxy", () => {
       const consoleSpy = vi.spyOn(console, "warn");
       process.env.OPENAPI_MCP_HEADERS = "invalid json";
 
-      const proxy = new MCPProxy("test-proxy", mockOpenApiSpec);
+      new MCPProxy("test-proxy", mockOpenApiSpec);
       expect(HttpClient).toHaveBeenCalledWith(
         expect.objectContaining({
           headers: {},
@@ -262,7 +262,7 @@ describe("MCPProxy", () => {
       const consoleSpy = vi.spyOn(console, "warn");
       process.env.OPENAPI_MCP_HEADERS = '"string"';
 
-      const proxy = new MCPProxy("test-proxy", mockOpenApiSpec);
+      new MCPProxy("test-proxy", mockOpenApiSpec);
       expect(HttpClient).toHaveBeenCalledWith(
         expect.objectContaining({
           headers: {},
@@ -275,6 +275,62 @@ describe("MCPProxy", () => {
       );
     });
   });
+
+  describe("base URL integration", () => {
+    const originalEnv = process.env;
+
+    beforeEach(() => {
+      process.env = { ...originalEnv };
+    });
+
+    afterEach(() => {
+      process.env = originalEnv;
+    });
+
+    it("should use ANYTYPE_API_ENDPOINT when set", () => {
+      process.env.ANYTYPE_API_ENDPOINT = "http://localhost:31012";
+
+      new MCPProxy("test-proxy", mockOpenApiSpec);
+
+      expect(HttpClient).toHaveBeenCalledWith(
+        expect.objectContaining({
+          baseUrl: "http://localhost:31012",
+        }),
+        expect.anything(),
+      );
+    });
+
+    it("should use spec servers when env var not set", () => {
+      delete process.env.ANYTYPE_API_ENDPOINT;
+
+      new MCPProxy("test-proxy", mockOpenApiSpec);
+
+      expect(HttpClient).toHaveBeenCalledWith(
+        expect.objectContaining({
+          baseUrl: "http://localhost:3000",
+        }),
+        expect.anything(),
+      );
+    });
+
+    it("should use default when neither env var nor spec servers available", () => {
+      delete process.env.ANYTYPE_API_ENDPOINT;
+      const specWithoutServers = {
+        ...mockOpenApiSpec,
+        servers: undefined,
+      };
+
+      new MCPProxy("test-proxy", specWithoutServers);
+
+      expect(HttpClient).toHaveBeenCalledWith(
+        expect.objectContaining({
+          baseUrl: "http://127.0.0.1:31009",
+        }),
+        expect.anything(),
+      );
+    });
+  });
+
   describe("connect", () => {
     it("should connect to transport", async () => {
       const mockTransport = {} as Transport;

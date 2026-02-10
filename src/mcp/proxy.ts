@@ -6,6 +6,7 @@ import { Headers } from "node-fetch";
 import { OpenAPIV3 } from "openapi-types";
 import { HttpClient, HttpClientError } from "../client/http-client";
 import { OpenAPIToMCPConverter } from "../openapi/parser";
+import { determineBaseUrl } from "../utils/endpoint";
 
 type PathItemObject = OpenAPIV3.PathItemObject & {
   get?: OpenAPIV3.OperationObject;
@@ -32,7 +33,7 @@ export class MCPProxy {
 
   constructor(name: string, openApiSpec: OpenAPIV3.Document) {
     this.server = new Server({ name, version: "1.0.0" }, { capabilities: { tools: {} } });
-    const baseUrl = openApiSpec.servers?.[0].url || "http://127.0.0.1:31009";
+    const baseUrl = determineBaseUrl(openApiSpec);
     this.httpClient = new HttpClient(
       {
         baseUrl,

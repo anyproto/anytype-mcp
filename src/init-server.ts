@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { OpenAPIV3 } from "openapi-types";
 import { MCPProxy } from "./mcp/proxy";
+import { getDefaultSpecUrl } from "./utils/endpoint";
 
 export class ValidationError extends Error {
   constructor(public errors: any[]) {
@@ -13,7 +14,7 @@ export class ValidationError extends Error {
 }
 
 export async function loadOpenApiSpec(specPath?: string): Promise<OpenAPIV3.Document> {
-  const finalSpec = specPath || "http://127.0.0.1:31009/docs/openapi.json";
+  const finalSpec = specPath || getDefaultSpecUrl();
   let rawSpec: string;
 
   if (finalSpec.startsWith("http://") || finalSpec.startsWith("https://")) {
