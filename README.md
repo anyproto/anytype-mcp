@@ -94,6 +94,39 @@ npm install -g @anyproto/anytype-mcp
 
 </details>
 
+### Custom API Base URL
+
+By default, the server connects to `http://127.0.0.1:31009`. For `anytype-cli` (port `31012`) or other custom base URLs, set `ANYTYPE_API_BASE_URL`:
+
+<details>
+<summary>Example Configuration</summary>
+
+**MCP Client (Claude Desktop, Cursor, etc.):**
+```json
+{
+  "mcpServers": {
+    "anytype": {
+      "command": "npx",
+      "args": ["-y", "@anyproto/anytype-mcp"],
+      "env": {
+        "ANYTYPE_API_BASE_URL": "http://localhost:31012",
+        "OPENAPI_MCP_HEADERS": "{\"Authorization\":\"Bearer <YOUR_API_KEY>\", \"Anytype-Version\":\"2025-11-08\"}"
+      }
+    }
+  }
+}
+```
+
+**Claude Code (CLI):**
+```bash
+claude mcp add anytype \
+  -e ANYTYPE_API_BASE_URL='http://localhost:31012' \
+  -e OPENAPI_MCP_HEADERS='{"Authorization":"Bearer <YOUR_API_KEY>", "Anytype-Version":"2025-11-08"}' \
+  -s user -- npx -y @anyproto/anytype-mcp
+```
+
+</details>
+
 ## Example Interactions
 
 Here are some examples of how you can interact with your Anytype:
