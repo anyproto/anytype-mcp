@@ -5,7 +5,7 @@ import { OpenAPIV3 } from "openapi-types";
  * Parses the ANYTYPE_API_BASE_URL environment variable and returns the origin.
  * Returns null if not set, invalid, or uses an unsupported protocol.
  */
-export function parseEndpointFromEnv(): string | null {
+export function parseBaseUrlFromEnv(): string | null {
   const endpoint = process.env.ANYTYPE_API_BASE_URL;
   if (!endpoint) {
     return null;
