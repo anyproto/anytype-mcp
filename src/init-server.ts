@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { OpenAPIV3 } from "openapi-types";
 import { MCPProxy } from "./mcp/proxy";
-import { getDefaultSpecUrl } from "./utils/endpoint";
+import { getDefaultSpecUrl } from "./utils/base-url";
 
 export class ValidationError extends Error {
   constructor(public errors: any[]) {

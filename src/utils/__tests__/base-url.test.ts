@@ -1,8 +1,8 @@
 import { OpenAPIV3 } from "openapi-types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { determineBaseUrl, getDefaultSpecUrl, parseEndpointFromEnv } from "../endpoint";
+import { determineBaseUrl, getDefaultSpecUrl, parseBaseUrlFromEnv } from "../base-url";
 
-describe("endpoint utilities", () => {
+describe("base-url utilities", () => {
   const originalEnv = process.env;
 
   beforeEach(() => {
@@ -13,32 +13,32 @@ describe("endpoint utilities", () => {
     process.env = originalEnv;
   });
 
-  describe("parseEndpointFromEnv", () => {
+  describe("parseBaseUrlFromEnv", () => {
     it("should parse valid HTTP URL from env", () => {
       process.env.ANYTYPE_API_BASE_URL = "http://localhost:31012";
-      expect(parseEndpointFromEnv()).toBe("http://localhost:31012");
+      expect(parseBaseUrlFromEnv()).toBe("http://localhost:31012");
     });
 
     it("should parse valid HTTPS URL from env", () => {
       process.env.ANYTYPE_API_BASE_URL = "https://api.example.com:8080";
-      expect(parseEndpointFromEnv()).toBe("https://api.example.com:8080");
+      expect(parseBaseUrlFromEnv()).toBe("https://api.example.com:8080");
     });
 
     it("should strip path from URL and return origin only", () => {
       process.env.ANYTYPE_API_BASE_URL = "http://localhost:31012/api/v1";
-      expect(parseEndpointFromEnv()).toBe("http://localhost:31012");
+      expect(parseBaseUrlFromEnv()).toBe("http://localhost:31012");
     });
 
     it("should return null when env var is not set", () => {
       delete process.env.ANYTYPE_API_BASE_URL;
-      expect(parseEndpointFromEnv()).toBeNull();
+      expect(parseBaseUrlFromEnv()).toBeNull();
     });
 
     it("should return null and warn on invalid URL", () => {
       const consoleSpy = vi.spyOn(console, "warn");
       process.env.ANYTYPE_API_BASE_URL = "not-a-valid-url";
 
-      expect(parseEndpointFromEnv()).toBeNull();
+      expect(parseBaseUrlFromEnv()).toBeNull();
       expect(consoleSpy).toHaveBeenCalledWith(
         "Failed to parse ANYTYPE_API_BASE_URL environment variable:",
         expect.any(Error),
@@ -49,7 +49,7 @@ describe("endpoint utilities", () => {
       const consoleSpy = vi.spyOn(console, "warn");
       process.env.ANYTYPE_API_BASE_URL = "ftp://localhost:31012";
 
-      expect(parseEndpointFromEnv()).toBeNull();
+      expect(parseBaseUrlFromEnv()).toBeNull();
       expect(consoleSpy).toHaveBeenCalledWith(
         "ANYTYPE_API_BASE_URL must use http:// or https:// protocol, got: ftp:. Ignoring and using fallback.",
       );

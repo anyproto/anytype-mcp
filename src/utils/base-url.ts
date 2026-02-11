@@ -34,7 +34,7 @@ export function parseBaseUrlFromEnv(): string | null {
  */
 export function determineBaseUrl(openApiSpec?: OpenAPIV3.Document): string {
   // Priority 1: Environment variable
-  const envEndpoint = parseEndpointFromEnv();
+  const envEndpoint = parseBaseUrlFromEnv();
   if (envEndpoint) {
     console.error(`Using base URL from ANYTYPE_API_BASE_URL: ${envEndpoint}`);
     return envEndpoint;
@@ -59,7 +59,7 @@ export function determineBaseUrl(openApiSpec?: OpenAPIV3.Document): string {
  * Otherwise, returns the default spec URL.
  */
 export function getDefaultSpecUrl(): string {
-  const endpoint = parseEndpointFromEnv();
+  const endpoint = parseBaseUrlFromEnv();
   if (endpoint) {
     return `${endpoint}/docs/openapi.json`;
   }

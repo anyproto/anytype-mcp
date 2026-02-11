@@ -1,6 +1,6 @@
 import { AppKeyGenerator } from "../src/auth/get-key";
 import { initProxy, loadOpenApiSpec, ValidationError } from "../src/init-server";
-import { determineBaseUrl } from "../src/utils/endpoint";
+import { determineBaseUrl } from "../src/utils/base-url";
 
 async function generateAppKey(specPath?: string) {
   const openApiSpec = await loadOpenApiSpec(specPath);

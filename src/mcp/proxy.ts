@@ -6,7 +6,7 @@ import { Headers } from "node-fetch";
 import { OpenAPIV3 } from "openapi-types";
 import { HttpClient, HttpClientError } from "../client/http-client";
 import { OpenAPIToMCPConverter } from "../openapi/parser";
-import { determineBaseUrl } from "../utils/endpoint";
+import { determineBaseUrl } from "../utils/base-url";
 
 type PathItemObject = OpenAPIV3.PathItemObject & {
   get?: OpenAPIV3.OperationObject;
