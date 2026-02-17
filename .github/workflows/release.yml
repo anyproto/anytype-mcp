@@ -18,35 +18,35 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
-#      - name: Setup Node.js
-#        uses: actions/setup-node@v6
-#        with:
-#          node-version: "24"
-#          registry-url: https://registry.npmjs.org/
-#
-#      - name: Install dependencies
-#        run: npm install
-#
-#      - name: Run type checks
-#        run: npm run typecheck
-#
-#      - name: Run tests
-#        run: npm run test
-#
-#      - name: Build project
-#        run: npm run build
-#
-#      - name: Publish to npm
-#        run: npm publish --access public
-#
-#      - name: Create Release
-#        uses: softprops/action-gh-release@v2
-#        with:
-#          name: ${{ github.ref_name }}
-#          generate_release_notes: true
-#          draft: false
-#          prerelease: false
-#          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          registry-url: https://registry.npmjs.org/
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run type checks
+        run: npm run typecheck
+
+      - name: Run tests
+        run: npm run test
+
+      - name: Build project
+        run: npm run build
+
+      - name: Publish to npm
+        run: npm publish --access public
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       # build and push docker image
       - name: Docker meta
