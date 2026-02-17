@@ -18,48 +18,37 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: "24"
-          registry-url: https://registry.npmjs.org/
-
-      - name: Install dependencies
-        run: npm install
-
-      - name: Run type checks
-        run: npm run typecheck
-
-      - name: Run tests
-        run: npm run test
-
-      - name: Build project
-        run: npm run build
-
-      - name: Publish to npm
-        run: npm publish --access public
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
-        with:
-          name: ${{ github.ref_name }}
-          generate_release_notes: true
-          draft: false
-          prerelease: false
-          token: ${{ secrets.GITHUB_TOKEN }}
+#      - name: Setup Node.js
+#        uses: actions/setup-node@v6
+#        with:
+#          node-version: "24"
+#          registry-url: https://registry.npmjs.org/
+#
+#      - name: Install dependencies
+#        run: npm install
+#
+#      - name: Run type checks
+#        run: npm run typecheck
+#
+#      - name: Run tests
+#        run: npm run test
+#
+#      - name: Build project
+#        run: npm run build
+#
+#      - name: Publish to npm
+#        run: npm publish --access public
+#
+#      - name: Create Release
+#        uses: softprops/action-gh-release@v2
+#        with:
+#          name: ${{ github.ref_name }}
+#          generate_release_notes: true
+#          draft: false
+#          prerelease: false
+#          token: ${{ secrets.GITHUB_TOKEN }}
 
       # build and push docker image
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.repository_owner }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Docker meta
         id: meta
         uses: docker/metadata-action@v5
@@ -68,12 +57,31 @@ jobs:
             ${{ github.repository }}
             ghcr.io/${{ github.repository }}
           tags: |
+            type=raw,value=latest
             type=ref,event=tag
             type=sha
-            type=raw,value=latest
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+         registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
       - name: Build and push
         uses: docker/build-push-action@v6
