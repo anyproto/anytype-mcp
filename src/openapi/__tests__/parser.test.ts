@@ -1593,3 +1593,208 @@ describe("OpenAPIToMCPConverter - Additional Complex Tests", () => {
     expect(openApiLookup).toEqual(expected.openApiLookup);
   });
 });
+
+describe("OpenAPIToMCPConverter - Schema Caching and $defs Population", () => {
+  it("populates $defs correctly when cached schemas with cycles are reused across operations", () => {
+    // This test verifies that when a schema with cycles is cached from one operation
+    // and reused in another operation, the $defs are still properly populated.
+    // Cycles are required because non-cyclic refs are resolved inline.
+    const spec = {
+      openapi: "3.0.0",
+      info: { title: "Cache Test API", version: "1.0.0" },
+      paths: {
+        "/first": {
+          post: {
+            operationId: "firstOperation",
+            requestBody: {
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/Node" },
+                },
+              },
+            },
+            responses: { "200": { description: "OK" } },
+          },
+        },
+        "/second": {
+          post: {
+            operationId: "secondOperation",
+            requestBody: {
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/Node" },
+                },
+              },
+            },
+            responses: { "200": { description: "OK" } },
+          },
+        },
+      },
+      components: {
+        schemas: {
+          // Self-referential schema creates a cycle
+          Node: {
+            type: "object",
+            properties: {
+              value: { type: "string" },
+              children: {
+                type: "array",
+                items: { $ref: "#/components/schemas/Node" }, // Self-reference
+              },
+            },
+          },
+        },
+      },
+    };
+
+    const converter = new OpenAPIToMCPConverter(spec as any);
+    const { tools } = converter.convertToMCPTools();
+
+    // Both operations should have $defs with Node
+    const firstTool = tools.API.methods.find((t) => t.name === "firstOperation");
+    const secondTool = tools.API.methods.find((t) => t.name === "secondOperation");
+
+    expect(firstTool).toBeDefined();
+    expect(secondTool).toBeDefined();
+
+    // First operation triggers conversion and caching
+    expect(firstTool!.inputSchema.$defs).toBeDefined();
+    expect(firstTool!.inputSchema.$defs!["Node"]).toBeDefined();
+
+    // The second operation reuses cached Node, but should still have $defs populated
+    // because trackRefsInSchema() scans the cached schema for $refs
+    expect(secondTool!.inputSchema.$defs).toBeDefined();
+    expect(secondTool!.inputSchema.$defs!["Node"]).toBeDefined();
+  });
+
+  it("populates $defs correctly for self-referential schemas", () => {
+    // This test verifies handling of recursive schemas like FilterExpression
+    const spec = {
+      openapi: "3.0.0",
+      info: { title: "Recursive Schema API", version: "1.0.0" },
+      paths: {
+        "/search": {
+          post: {
+            operationId: "search",
+            requestBody: {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      filter: { $ref: "#/components/schemas/FilterExpression" },
+                    },
+                  },
+                },
+              },
+            },
+            responses: { "200": { description: "OK" } },
+          },
+        },
+      },
+      components: {
+        schemas: {
+          FilterExpression: {
+            type: "object",
+            description: "Expression filter with nested AND/OR conditions",
+            properties: {
+              operator: { type: "string", enum: ["and", "or"] },
+              conditions: {
+                type: "array",
+                items: { $ref: "#/components/schemas/FilterItem" },
+              },
+              // Self-reference for nested filters
+              filters: {
+                type: "array",
+                items: { $ref: "#/components/schemas/FilterExpression" },
+              },
+            },
+          },
+          FilterItem: {
+            type: "object",
+            properties: {
+              field: { type: "string" },
+              value: { type: "string" },
+            },
+          },
+        },
+      },
+    };
+
+    const converter = new OpenAPIToMCPConverter(spec as any);
+    const { tools } = converter.convertToMCPTools();
+
+    const searchTool = tools.API.methods.find((t) => t.name === "search");
+    expect(searchTool).toBeDefined();
+
+    // $defs should contain both FilterExpression and FilterItem
+    const defs = searchTool!.inputSchema.$defs;
+    expect(defs).toBeDefined();
+    expect(defs!["FilterExpression"]).toBeDefined();
+    expect(defs!["FilterItem"]).toBeDefined();
+
+    // FilterExpression in $defs should have self-reference
+    const filterExprDef = defs!["FilterExpression"] as any;
+    expect(filterExprDef.properties.filters.items.$ref).toBe("#/$defs/FilterExpression");
+  });
+
+  it("handles transitive cyclic schema references", () => {
+    // A -> B -> C -> A creates a cycle, so all three should be in $defs
+    const spec = {
+      openapi: "3.0.0",
+      info: { title: "Transitive Cyclic API", version: "1.0.0" },
+      paths: {
+        "/test": {
+          post: {
+            operationId: "createTest",
+            requestBody: {
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/A" },
+                },
+              },
+            },
+            responses: { "200": { description: "OK" } },
+          },
+        },
+      },
+      components: {
+        schemas: {
+          A: {
+            type: "object",
+            properties: {
+              b: { $ref: "#/components/schemas/B" },
+            },
+          },
+          B: {
+            type: "object",
+            properties: {
+              c: { $ref: "#/components/schemas/C" },
+            },
+          },
+          C: {
+            type: "object",
+            properties: {
+              // Back-reference to A creates a cycle
+              a: { $ref: "#/components/schemas/A" },
+              value: { type: "string" },
+            },
+          },
+        },
+      },
+    };
+
+    const converter = new OpenAPIToMCPConverter(spec as any);
+    const { tools } = converter.convertToMCPTools();
+
+    const tool = tools.API.methods.find((t) => t.name === "createTest");
+    expect(tool).toBeDefined();
+
+    // inputSchema should have all three schemas in $defs due to transitive closure with cycle
+    const defs = tool!.inputSchema.$defs;
+    expect(defs).toBeDefined();
+    expect(defs!["A"]).toBeDefined();
+    expect(defs!["B"]).toBeDefined();
+    expect(defs!["C"]).toBeDefined();
+  });
+});
