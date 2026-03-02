@@ -5,7 +5,7 @@ interface AuthToken {
   api_key: string;
 }
 
-export class AppKeyGenerator {
+export class ApiKeyGenerator {
   private readonly rl: readline.Interface;
   private readonly appName: string = "anytype_mcp_server";
   private readonly basePath: string;
@@ -24,8 +24,8 @@ export class AppKeyGenerator {
     });
   }
 
-  private displaySuccessMessage(appKey: string, anytypeVersion: string): void {
-    console.log(`\nYour API KEY: ${appKey}`);
+  private displaySuccessMessage(apiKey: string, anytypeVersion: string): void {
+    console.log(`\nYour API KEY: ${apiKey}`);
     console.log("\nAdd this to your MCP settings file as:");
     console.log(`
 {
@@ -37,7 +37,7 @@ export class AppKeyGenerator {
         "@anyproto/anytype-mcp",
       ],
       "env": {
-        "OPENAPI_MCP_HEADERS": "{\\"Authorization\\":\\"Bearer ${appKey}\\", \\"Anytype-Version\\":\\"${anytypeVersion}\\"}"
+        "OPENAPI_MCP_HEADERS": "{\\"Authorization\\":\\"Bearer ${apiKey}\\", \\"Anytype-Version\\":\\"${anytypeVersion}\\"}"
       }
     }
   }
@@ -73,7 +73,7 @@ export class AppKeyGenerator {
   private async completeAuthentication(
     challengeId: string,
     code: string,
-  ): Promise<{ appKey: string; anytypeVersion: string }> {
+  ): Promise<{ apiKey: string; anytypeVersion: string }> {
     try {
       const response = await axios.post<AuthToken>(`${this.basePath}/v1/auth/api_keys`, {
         challenge_id: challengeId,
@@ -84,14 +84,14 @@ export class AppKeyGenerator {
         throw new Error("Authentication failed: No api key received");
       }
 
-      return { appKey: response.data.api_key, anytypeVersion: response.headers["anytype-version"] };
+      return { apiKey: response.data.api_key, anytypeVersion: response.headers["anytype-version"] };
     } catch (error) {
       console.error("Authentication error:", error instanceof Error ? error.message : error);
       throw new Error("Failed to complete authentication");
     }
   }
 
-  public async generateAppKey(): Promise<void> {
+  public async generateApiKey(): Promise<void> {
     try {
       console.log("Starting authentication to get API key...");
 
@@ -99,9 +99,9 @@ export class AppKeyGenerator {
       console.log("Please check Anytype Desktop for the 4-digit code");
       const code = await this.prompt("Enter the 4-digit code shown in Anytype Desktop: ");
 
-      const { appKey, anytypeVersion } = await this.completeAuthentication(challengeId, code);
+      const { apiKey, anytypeVersion } = await this.completeAuthentication(challengeId, code);
       console.log("Authenticated successfully!");
-      this.displaySuccessMessage(appKey, anytypeVersion);
+      this.displaySuccessMessage(apiKey, anytypeVersion);
     } catch (error) {
       console.error("Error:", error instanceof Error ? error.message : error);
       process.exit(1);
