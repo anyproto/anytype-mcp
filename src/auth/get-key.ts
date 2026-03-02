@@ -2,7 +2,7 @@ import axios from "axios";
 import * as readline from "readline";
 
 interface AuthToken {
-  app_key: string;
+  api_key: string;
 }
 
 export class AppKeyGenerator {
@@ -51,9 +51,7 @@ export class AppKeyGenerator {
    */
   private async startAuthentication(): Promise<string> {
     try {
-      const response = await axios.post(`${this.basePath}/v1/auth/display_code`, null, {
-        params: { app_name: this.appName },
-      });
+      const response = await axios.post(`${this.basePath}/v1/auth/challenges`, { app_name: this.appName });
 
       if (!response.data?.challenge_id) {
         throw new Error("Failed to get challenge ID");
@@ -77,15 +75,16 @@ export class AppKeyGenerator {
     code: string,
   ): Promise<{ appKey: string; anytypeVersion: string }> {
     try {
-      const response = await axios.post<AuthToken>(`${this.basePath}/v1/auth/token`, null, {
-        params: { challenge_id: challengeId, code: code },
+      const response = await axios.post<AuthToken>(`${this.basePath}/v1/auth/api_keys`, {
+        challenge_id: challengeId,
+        code: code,
       });
 
-      if (!response.data?.app_key) {
-        throw new Error("Authentication failed: No app key received");
+      if (!response.data?.api_key) {
+        throw new Error("Authentication failed: No api key received");
       }
 
-      return { appKey: response.data.app_key, anytypeVersion: response.headers["anytype-version"] };
+      return { appKey: response.data.api_key, anytypeVersion: response.headers["anytype-version"] };
     } catch (error) {
       console.error("Authentication error:", error instanceof Error ? error.message : error);
       throw new Error("Failed to complete authentication");
