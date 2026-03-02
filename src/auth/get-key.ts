@@ -25,7 +25,7 @@ export class AppKeyGenerator {
   }
 
   private displaySuccessMessage(appKey: string, anytypeVersion: string): void {
-    console.log(`\nYour APP KEY: ${appKey}`);
+    console.log(`\nYour API KEY: ${appKey}`);
     console.log("\nAdd this to your MCP settings file as:");
     console.log(`
 {
@@ -93,7 +93,7 @@ export class AppKeyGenerator {
 
   public async generateAppKey(): Promise<void> {
     try {
-      console.log("Starting authentication to get app key...");
+      console.log("Starting authentication to get API key...");
 
       const challengeId = await this.startAuthentication();
       console.log("Please check Anytype Desktop for the 4-digit code");
