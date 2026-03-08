@@ -52,7 +52,7 @@ export class MCPProxy {
     this.setupHandlers();
   }
 
-  private setupHandlers() {
+  setupHandlers() {
     // Handle tool listing
     this.server.setRequestHandler(ListToolsRequestSchema, async () => {
       const tools: Tool[] = [];
@@ -99,23 +99,24 @@ export class MCPProxy {
           ],
         };
       } catch (error) {
-        console.error("Error in tool call", error);
         if (error instanceof HttpClientError) {
-          console.error("HttpClientError encountered, returning structured error", error);
           const data = error.data?.response?.data ?? error.data ?? {};
           return {
+            isError: true,
             content: [
               {
                 type: "text",
-                text: JSON.stringify({
-                  status: "error", // TODO: get this from http status code?
-                  ...(typeof data === "object" ? data : { data: data }),
-                }),
+                text: JSON.stringify(
+                  typeof data === "object" ? { httpStatus: error.status, ...data } : { httpStatus: error.status, data },
+                ),
               },
             ],
           };
         }
-        throw error;
+        console.error("Unexpected error in tool call", { name, error });
+
+        // don’t leak internals or secrets, throw opaque error
+        throw new Error("Internal server error while handling MCP request");
       }
     });
   }
@@ -146,5 +147,20 @@ export class MCPProxy {
   async connect(transport: Transport) {
     // The SDK will handle stdio communication
     await this.server.connect(transport);
+  }
+
+  /**
+   * Creates a lightweight clone that reuses pre-parsed tools and HTTP client
+   * but has a fresh Server instance, required for stateless HTTP transport
+   * where each request needs its own Server/transport pair.
+   */
+  clone(): MCPProxy {
+    const instance = Object.create(MCPProxy.prototype) as MCPProxy;
+    instance.server = new Server({ name: "Anytype API", version: "1.0.0" }, { capabilities: { tools: {} } });
+    instance.httpClient = this.httpClient;
+    instance.tools = this.tools;
+    instance.openApiLookup = this.openApiLookup;
+    instance.setupHandlers();
+    return instance;
   }
 }

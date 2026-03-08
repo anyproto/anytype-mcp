@@ -1,10 +1,9 @@
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import axios from "axios";
 import fs from "node:fs";
-import http from "node:http";
 import path from "node:path";
 import { OpenAPIV3 } from "openapi-types";
+import { startHttpTransport } from "./mcp/http-transport";
 import { MCPProxy } from "./mcp/proxy";
 import { getDefaultSpecUrl } from "./utils/base-url";
 import { mcpProxyConfig } from "./utils/proxy-config";
@@ -50,30 +49,15 @@ export async function loadOpenApiSpec(specPath?: string): Promise<OpenAPIV3.Docu
   }
 }
 
-async function startHttpTransport(port: number) {
-  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-
-  const server = http.createServer((req, res) => {
-    if (req.url === "/mcp") transport.handleRequest(req, res);
-    else {
-      res.writeHead(404);
-      res.end();
-    }
-  });
-
-  await new Promise<void>((resolve) => server.listen(port, resolve));
-  console.error(`HTTP transport on http://localhost:${port}/mcp`);
-  return transport;
-}
-
 export async function initProxy(specPath: string) {
   console.error("Initializing Anytype MCP Server...");
   const openApiSpec = await loadOpenApiSpec(specPath);
   const proxy = new MCPProxy("Anytype API", openApiSpec);
   const { transport: transportConfig } = mcpProxyConfig;
-  const transport =
-    transportConfig.type === "http" ? await startHttpTransport(transportConfig.port) : new StdioServerTransport();
-
-  await proxy.connect(transport);
+  if (transportConfig.type === "http") {
+    await startHttpTransport(proxy, transportConfig.host, transportConfig.port);
+  } else {
+    await proxy.connect(new StdioServerTransport());
+  }
   console.error(`Anytype MCP Server running on ${transportConfig.type}`);
 }

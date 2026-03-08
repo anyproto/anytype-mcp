@@ -1,4 +1,5 @@
 import type { AxiosInstance } from "axios";
+import axios from "axios";
 import FormData from "form-data";
 import fs from "fs";
 import { Headers } from "node-fetch";
@@ -184,13 +185,20 @@ export class HttpClient {
         headers: responseHeaders,
       };
     } catch (error: any) {
-      if (error.response) {
-        console.error("Error in http client", error);
+      if (axios.isAxiosError(error) && error.response) {
         const headers = new Headers();
         Object.entries(error.response.headers).forEach(([key, value]) => {
           if (value) headers.append(key, value.toString());
         });
-
+        console.error("HTTP error", {
+          operationId,
+          status: error.response.status,
+          statusText: error.response.statusText,
+          data: error.response.data,
+          requestUrl: error.config?.url,
+          requestMethod: error.config?.method,
+          requestData: error.config?.data,
+        });
         throw new HttpClientError(
           error.response.statusText || "Request failed",
           error.response.status,
