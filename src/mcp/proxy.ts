@@ -6,6 +6,7 @@ import { OpenAPIV3 } from "openapi-types";
 import { HttpClient, HttpClientError } from "../client/http-client";
 import { OpenAPIToMCPConverter, type ToolMethod } from "../openapi/parser";
 import { determineBaseUrl } from "../utils/base-url";
+import { mcpProxyConfig } from "../utils/proxy-config";
 
 type PathItemObject = OpenAPIV3.PathItemObject & {
   get?: OpenAPIV3.OperationObject;
@@ -27,7 +28,7 @@ export class MCPProxy {
     this.httpClient = new HttpClient(
       {
         baseUrl,
-        headers: this.parseHeadersFromEnv(),
+        headers: mcpProxyConfig.openApiHeaders,
       },
       openApiSpec,
     );
@@ -44,7 +45,7 @@ export class MCPProxy {
     this.setupHandlers();
   }
 
-  private setupHandlers() {
+  setupHandlers() {
     // Handle tool listing
     this.server.setRequestHandler(ListToolsRequestSchema, async () => {
       const toolsByMethodName = new Map<string, { toolName: string; method: ToolMethod }[]>();
@@ -107,48 +108,30 @@ export class MCPProxy {
           ],
         };
       } catch (error) {
-        console.error("Error in tool call", error);
         if (error instanceof HttpClientError) {
-          console.error("HttpClientError encountered, returning structured error", error);
           const data = error.data?.response?.data ?? error.data ?? {};
           return {
+            isError: true,
             content: [
               {
                 type: "text",
-                text: JSON.stringify({
-                  status: "error", // TODO: get this from http status code?
-                  ...(typeof data === "object" ? data : { data: data }),
-                }),
+                text: JSON.stringify(
+                  typeof data === "object" ? { httpStatus: error.status, ...data } : { httpStatus: error.status, data },
+                ),
               },
             ],
           };
         }
-        throw error;
+        console.error("Unexpected error in tool call", { name, error });
+
+        // don’t leak internals or secrets, throw opaque error
+        throw new Error("Internal server error while handling MCP request");
       }
     });
   }
 
   private findOperation(operationId: string): (OpenAPIV3.OperationObject & { method: string; path: string }) | null {
     return this.openApiLookup[operationId] ?? null;
-  }
-
-  private parseHeadersFromEnv(): Record<string, string> {
-    const headersJson = process.env.OPENAPI_MCP_HEADERS;
-    if (!headersJson) {
-      return {};
-    }
-
-    try {
-      const headers = JSON.parse(headersJson);
-      if (typeof headers !== "object" || headers === null) {
-        console.warn("OPENAPI_MCP_HEADERS environment variable must be a JSON object, got:", typeof headers);
-        return {};
-      }
-      return headers;
-    } catch (error) {
-      console.warn("Failed to parse OPENAPI_MCP_HEADERS environment variable:", error);
-      return {};
-    }
   }
 
   private getContentType(headers: Headers): "text" | "image" | "binary" {
@@ -173,5 +156,21 @@ export class MCPProxy {
   async connect(transport: Transport) {
     // The SDK will handle stdio communication
     await this.server.connect(transport);
+  }
+
+  /**
+   * Creates a lightweight clone that reuses pre-parsed tools and HTTP client
+   * but has a fresh Server instance, required for stateless HTTP transport
+   * where each request needs its own Server/transport pair.
+   * Optionally merges per-request headers (e.g. Authorization passthrough).
+   */
+  clone(requestHeaders?: Record<string, string>): MCPProxy {
+    const instance = Object.create(MCPProxy.prototype) as MCPProxy;
+    instance.server = new Server({ name: "Anytype API", version: "1.0.0" }, { capabilities: { tools: {} } });
+    instance.httpClient = requestHeaders ? this.httpClient.withHeaders(requestHeaders) : this.httpClient;
+    instance.tools = this.tools;
+    instance.openApiLookup = this.openApiLookup;
+    instance.setupHandlers();
+    return instance;
   }
 }

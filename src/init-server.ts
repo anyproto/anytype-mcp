@@ -3,8 +3,10 @@ import axios from "axios";
 import fs from "node:fs";
 import path from "node:path";
 import { OpenAPIV3 } from "openapi-types";
+import { startHttpTransport } from "./mcp/http-transport";
 import { MCPProxy } from "./mcp/proxy";
 import { getDefaultSpecUrl } from "./utils/base-url";
+import { mcpProxyConfig } from "./utils/proxy-config";
 
 export class ValidationError extends Error {
   constructor(public errors: any[]) {
@@ -51,7 +53,11 @@ export async function initProxy(specPath: string) {
   console.error("Initializing Anytype MCP Server...");
   const openApiSpec = await loadOpenApiSpec(specPath);
   const proxy = new MCPProxy("Anytype API", openApiSpec);
-
-  await proxy.connect(new StdioServerTransport());
-  console.error("Anytype MCP Server running on stdio");
+  const { transport: transportConfig } = mcpProxyConfig;
+  if (transportConfig.type === "http") {
+    await startHttpTransport(proxy, transportConfig.host, transportConfig.port);
+  } else {
+    await proxy.connect(new StdioServerTransport());
+  }
+  console.error(`Anytype MCP Server running on ${transportConfig.type}`);
 }

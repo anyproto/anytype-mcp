@@ -1,30 +1,5 @@
-import { URL } from "node:url";
 import { OpenAPIV3 } from "openapi-types";
-
-/**
- * Parses the ANYTYPE_API_BASE_URL environment variable and returns the origin.
- * Returns null if not set, invalid, or uses an unsupported protocol.
- */
-export function parseBaseUrlFromEnv(): string | null {
-  const endpoint = process.env.ANYTYPE_API_BASE_URL;
-  if (!endpoint) {
-    return null;
-  }
-
-  try {
-    const url = new URL(endpoint);
-    if (url.protocol !== "http:" && url.protocol !== "https:") {
-      console.warn(
-        `ANYTYPE_API_BASE_URL must use http:// or https:// protocol, got: ${url.protocol}. Ignoring and using fallback.`,
-      );
-      return null;
-    }
-    return url.origin;
-  } catch (error) {
-    console.warn("Failed to parse ANYTYPE_API_BASE_URL environment variable:", error);
-    return null;
-  }
-}
+import { mcpProxyConfig } from "./proxy-config";
 
 /**
  * Determines the base URL using priority order:
@@ -34,7 +9,7 @@ export function parseBaseUrlFromEnv(): string | null {
  */
 export function determineBaseUrl(openApiSpec?: OpenAPIV3.Document): string {
   // Priority 1: Environment variable
-  const envEndpoint = parseBaseUrlFromEnv();
+  const envEndpoint = mcpProxyConfig.anytypeApiBaseUrl;
   if (envEndpoint) {
     console.error(`Using base URL from ANYTYPE_API_BASE_URL: ${envEndpoint}`);
     return envEndpoint;
@@ -59,7 +34,7 @@ export function determineBaseUrl(openApiSpec?: OpenAPIV3.Document): string {
  * Otherwise, returns the default spec URL.
  */
 export function getDefaultSpecUrl(): string {
-  const endpoint = parseBaseUrlFromEnv();
+  const endpoint = mcpProxyConfig.anytypeApiBaseUrl;
   if (endpoint) {
     return `${endpoint}/docs/openapi.json`;
   }
