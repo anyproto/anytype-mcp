@@ -7,6 +7,7 @@ import { OpenAPIV3 } from "openapi-types";
 import { HttpClient, HttpClientError } from "../client/http-client";
 import { OpenAPIToMCPConverter } from "../openapi/parser";
 import { determineBaseUrl } from "../utils/base-url";
+import { mcpProxyConfig } from "../utils/proxy-config";
 
 type PathItemObject = OpenAPIV3.PathItemObject & {
   get?: OpenAPIV3.OperationObject;
@@ -37,7 +38,7 @@ export class MCPProxy {
     this.httpClient = new HttpClient(
       {
         baseUrl,
-        headers: this.parseHeadersFromEnv(),
+        headers: mcpProxyConfig.openApiHeaders,
       },
       openApiSpec,
     );
@@ -121,25 +122,6 @@ export class MCPProxy {
 
   private findOperation(operationId: string): (OpenAPIV3.OperationObject & { method: string; path: string }) | null {
     return this.openApiLookup[operationId] ?? null;
-  }
-
-  private parseHeadersFromEnv(): Record<string, string> {
-    const headersJson = process.env.OPENAPI_MCP_HEADERS;
-    if (!headersJson) {
-      return {};
-    }
-
-    try {
-      const headers = JSON.parse(headersJson);
-      if (typeof headers !== "object" || headers === null) {
-        console.warn("OPENAPI_MCP_HEADERS environment variable must be a JSON object, got:", typeof headers);
-        return {};
-      }
-      return headers;
-    } catch (error) {
-      console.warn("Failed to parse OPENAPI_MCP_HEADERS environment variable:", error);
-      return {};
-    }
   }
 
   private getContentType(headers: Headers): "text" | "image" | "binary" {
