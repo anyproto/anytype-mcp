@@ -32,7 +32,7 @@ export class MCPProxy {
   private tools: Record<string, NewToolDefinition>;
   private openApiLookup: Record<string, OpenAPIV3.OperationObject & { method: string; path: string }>;
   private state = {
-    operationsLogged: false,
+    toolsLogged: false,
     serverInfo: { name: "", version: "" },
   };
 
@@ -80,15 +80,15 @@ export class MCPProxy {
 
     // Handle tool calling
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
-      console.error("calling tool", request.params);
       const { name, arguments: params } = request.params;
 
       // Find the operation in OpenAPI spec
       const operation = this.findOperation(name);
 
-      if (!this.state.operationsLogged) {
-        console.error("operations", this.openApiLookup);
-        this.state.operationsLogged = true;
+      if (!this.state.toolsLogged) {
+        const toolNames = Object.keys(this.openApiLookup);
+        console.error(`tools (count: ${toolNames.length}): ${toolNames.join(", ")}`);
+        this.state.toolsLogged = true;
       }
 
       if (!operation) {
@@ -123,7 +123,8 @@ export class MCPProxy {
             ],
           };
         }
-        console.error("Unexpected error in tool call", { name, error });
+
+        console.error(`Unexpected error in "${name}" tool call`, error);
 
         // don’t leak internals or secrets, throw opaque error
         throw new Error("Internal server error while handling MCP request");

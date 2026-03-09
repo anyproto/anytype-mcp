@@ -9,6 +9,8 @@ export const CORS_HEADERS = {
   "Access-Control-Max-Age": "86400",
 };
 
+const MCP_HTTP_PATH = "/mcp";
+
 export function applyCorsHeaders(req: http.IncomingMessage, res: http.ServerResponse): void {
   const origin = req.headers.origin;
   if (!origin) return;
@@ -23,7 +25,7 @@ export async function startHttpTransport(proxy: MCPProxy, host: string, port: nu
 
     applyCorsHeaders(req, res);
 
-    if (url === "/mcp") {
+    if (url === MCP_HTTP_PATH) {
       if (method === "OPTIONS") {
         res.writeHead(204);
         res.end();
@@ -50,5 +52,5 @@ export async function startHttpTransport(proxy: MCPProxy, host: string, port: nu
   });
 
   await new Promise<void>((resolve) => server.listen(port, host, resolve));
-  console.error(`HTTP transport on http://${host}:${port}/mcp`);
+  console.error(`HTTP transport on http://${host}:${port}${MCP_HTTP_PATH}`);
 }
