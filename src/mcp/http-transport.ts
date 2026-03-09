@@ -1,5 +1,6 @@
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import http from "node:http";
+import { mcpProxyConfig } from "../utils/proxy-config";
 import { MCPProxy } from "./proxy";
 
 export const CORS_HEADERS = {
@@ -28,8 +29,14 @@ export async function startHttpTransport(proxy: MCPProxy, host: string, port: nu
         res.end();
       } else if (method === "GET" || method === "POST") {
         // Stateless mode: fresh transport + fresh Server per request
+        // Forward only whitelisted headers from MCP client to upstream Anytype API
+        const requestHeaders: Record<string, string> = {};
+        for (const name of mcpProxyConfig.passthroughHeaders) {
+          const value = req.headers[name];
+          if (typeof value === "string") requestHeaders[name] = value;
+        }
         const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-        await proxy.clone().connect(transport);
+        await proxy.clone(requestHeaders).connect(transport);
         await transport.handleRequest(req, res);
       } else {
         res.writeHead(405, { Allow: CORS_HEADERS["Access-Control-Allow-Methods"], "Content-Type": "text/plain" });

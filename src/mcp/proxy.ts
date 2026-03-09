@@ -153,11 +153,12 @@ export class MCPProxy {
    * Creates a lightweight clone that reuses pre-parsed tools and HTTP client
    * but has a fresh Server instance, required for stateless HTTP transport
    * where each request needs its own Server/transport pair.
+   * Optionally merges per-request headers (e.g. Authorization passthrough).
    */
-  clone(): MCPProxy {
+  clone(requestHeaders?: Record<string, string>): MCPProxy {
     const instance = Object.create(MCPProxy.prototype) as MCPProxy;
     instance.server = new Server({ name: "Anytype API", version: "1.0.0" }, { capabilities: { tools: {} } });
-    instance.httpClient = this.httpClient;
+    instance.httpClient = requestHeaders ? this.httpClient.withHeaders(requestHeaders) : this.httpClient;
     instance.tools = this.tools;
     instance.openApiLookup = this.openApiLookup;
     instance.setupHandlers();

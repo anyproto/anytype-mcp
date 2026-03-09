@@ -7,7 +7,15 @@ export const BASE_ENV_KEYS = [
   "MCP_PORT",
   "ANYTYPE_API_BASE_URL",
   "OPENAPI_MCP_HEADERS",
+  "MCP_PASSTHROUGH_HEADERS",
 ] as const;
+
+/**
+ * Headers allowed to be forwarded from MCP HTTP requests to the upstream API.
+ * Prevents header injection attacks (Host, Content-Length, Transfer-Encoding, etc.).
+ */
+export const DEFAULT_PASSTHROUGH_HEADERS = ["authorization", "anytype-version"] as const;
+
 export type ProxyConfigEnv = Partial<Record<(typeof BASE_ENV_KEYS)[number], string | undefined>>;
 
 const TransportSchema = z.discriminatedUnion("type", [
@@ -42,6 +50,22 @@ const McpProxyConfigSchema = z.object({
         return {} as Record<string, string>;
       }
     }),
+
+  /**
+   * Comma-separated list of inbound HTTP header names (lowercase) to forward
+   * to the upstream API. Defaults to DEFAULT_PASSTHROUGH_HEADERS.
+   */
+  passthroughHeaders: z
+    .string()
+    .optional()
+    .transform((val) =>
+      val
+        ? val
+            .split(",")
+            .map((h) => h.trim().toLowerCase())
+            .filter(Boolean)
+        : [...DEFAULT_PASSTHROUGH_HEADERS],
+    ),
 });
 
 export type McpProxyConfig = z.infer<typeof McpProxyConfigSchema>;
@@ -53,4 +77,5 @@ export const mcpProxyConfig: McpProxyConfig = McpProxyConfigSchema.parse({
       : { type: "stdio" },
   anytypeApiBaseUrl: process.env.ANYTYPE_API_BASE_URL,
   openApiHeaders: process.env.OPENAPI_MCP_HEADERS,
+  passthroughHeaders: process.env.MCP_PASSTHROUGH_HEADERS,
 });

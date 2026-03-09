@@ -33,8 +33,10 @@ export class HttpClientError extends Error {
 export class HttpClient {
   private api: Promise<AxiosInstance>;
   private client: OpenAPIClientAxios;
+  private baseHeaders: Record<string, string>;
 
   constructor(config: HttpClientConfig, openApiSpec: OpenAPIV3.Document | OpenAPIV3_1.Document) {
+    this.baseHeaders = config.headers ?? {};
     // @ts-expect-error OpenAPIClientAxios can be imported as default or named export, we handle both cases
     this.client = new (OpenAPIClientAxios.default ?? OpenAPIClientAxios)({
       definition: openApiSpec,
@@ -43,11 +45,23 @@ export class HttpClient {
         headers: {
           "Content-Type": "application/json",
           "User-Agent": "anytype-mcp-server",
-          ...config.headers,
+          ...this.baseHeaders,
         },
       },
     });
     this.api = this.client.init();
+  }
+
+  /**
+   * Returns a new HttpClient that merges the given headers into every request.
+   * Per-request headers (e.g. Authorization passthrough) take precedence over base headers.
+   */
+  withHeaders(headers: Record<string, string>): HttpClient {
+    const clone = Object.create(HttpClient.prototype) as HttpClient;
+    clone.baseHeaders = { ...this.baseHeaders, ...headers };
+    clone.client = this.client;
+    clone.api = this.api;
+    return clone;
   }
 
   private async prepareFileUpload(
@@ -164,6 +178,7 @@ export class HttpClient {
         : { ...(hasBody ? { "Content-Type": "application/json" } : { "Content-Type": null }) };
       const requestConfig = {
         headers: {
+          ...this.baseHeaders,
           ...headers,
         },
       };
