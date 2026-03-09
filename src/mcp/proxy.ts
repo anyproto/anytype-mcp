@@ -31,9 +31,14 @@ export class MCPProxy {
   private httpClient: HttpClient;
   private tools: Record<string, NewToolDefinition>;
   private openApiLookup: Record<string, OpenAPIV3.OperationObject & { method: string; path: string }>;
+  private state = {
+    operationsLogged: false,
+    serverInfo: { name: "", version: "" },
+  };
 
   constructor(name: string, openApiSpec: OpenAPIV3.Document) {
-    this.server = new Server({ name, version: "1.0.0" }, { capabilities: { tools: {} } });
+    this.state.serverInfo = { name, version: openApiSpec.info.version };
+    this.server = new Server(this.state.serverInfo, { capabilities: { tools: {} } });
     const baseUrl = determineBaseUrl(openApiSpec);
     this.httpClient = new HttpClient(
       {
@@ -80,7 +85,12 @@ export class MCPProxy {
 
       // Find the operation in OpenAPI spec
       const operation = this.findOperation(name);
-      console.error("operations", this.openApiLookup);
+
+      if (!this.state.operationsLogged) {
+        console.error("operations", this.openApiLookup);
+        this.state.operationsLogged = true;
+      }
+
       if (!operation) {
         throw new Error(`Method ${name} not found`);
       }
@@ -157,7 +167,8 @@ export class MCPProxy {
    */
   clone(requestHeaders?: Record<string, string>): MCPProxy {
     const instance = Object.create(MCPProxy.prototype) as MCPProxy;
-    instance.server = new Server({ name: "Anytype API", version: "1.0.0" }, { capabilities: { tools: {} } });
+    instance.state = this.state; // shared reference — mutations visible across clones
+    instance.server = new Server(this.state.serverInfo, { capabilities: { tools: {} } });
     instance.httpClient = requestHeaders ? this.httpClient.withHeaders(requestHeaders) : this.httpClient;
     instance.tools = this.tools;
     instance.openApiLookup = this.openApiLookup;

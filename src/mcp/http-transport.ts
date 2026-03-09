@@ -37,6 +37,7 @@ export async function startHttpTransport(proxy: MCPProxy, host: string, port: nu
         }
         const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
         await proxy.clone(requestHeaders).connect(transport);
+        res.on("close", () => transport.close().catch(() => {}));
         await transport.handleRequest(req, res);
       } else {
         res.writeHead(405, { Allow: CORS_HEADERS["Access-Control-Allow-Methods"], "Content-Type": "text/plain" });
