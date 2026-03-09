@@ -159,6 +159,7 @@ describe("proxy-config utilities", () => {
         transport: { type: "http", host: "0.0.0.0", port: 8888 },
         anytypeApiBaseUrl: "http://127.0.0.1:31009",
         openApiHeaders: { Authorization: "Bearer x" },
+        passthroughHeaders: ["authorization", "anytype-version"],
       });
     });
   });

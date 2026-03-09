@@ -21,9 +21,14 @@ export class MCPProxy {
   private httpClient: HttpClient;
   private methods: Record<string, ToolMethod[]>;
   private openApiLookup: Record<string, OpenAPIV3.OperationObject & { method: string; path: string }>;
+  private state = {
+    toolsLogged: false,
+    serverInfo: { name: "", version: "" },
+  };
 
   constructor(name: string, openApiSpec: OpenAPIV3.Document) {
-    this.server = new Server({ name, version: "1.0.0" }, { capabilities: { tools: {} } });
+    this.state.serverInfo = { name, version: openApiSpec.info.version };
+    this.server = new Server(this.state.serverInfo, { capabilities: { tools: {} } });
     const baseUrl = determineBaseUrl(openApiSpec);
     this.httpClient = new HttpClient(
       {
@@ -84,12 +89,17 @@ export class MCPProxy {
 
     // Handle tool calling
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
-      console.error("calling tool", request.params);
       const { name, arguments: params } = request.params;
 
       // Find the operation in OpenAPI spec
       const operation = this.findOperation(name);
-      console.error("operations", this.openApiLookup);
+
+      if (!this.state.toolsLogged) {
+        const toolNames = Object.keys(this.openApiLookup);
+        console.error(`tools (count: ${toolNames.length}): ${toolNames.join(", ")}`);
+        this.state.toolsLogged = true;
+      }
+
       if (!operation) {
         throw new Error(`Method ${name} not found`);
       }
@@ -122,7 +132,8 @@ export class MCPProxy {
             ],
           };
         }
-        console.error("Unexpected error in tool call", { name, error });
+
+        console.error(`Unexpected error in "${name}" tool call`, error);
 
         // don’t leak internals or secrets, throw opaque error
         throw new Error("Internal server error while handling MCP request");
@@ -166,7 +177,8 @@ export class MCPProxy {
    */
   clone(requestHeaders?: Record<string, string>): MCPProxy {
     const instance = Object.create(MCPProxy.prototype) as MCPProxy;
-    instance.server = new Server({ name: "Anytype API", version: "1.0.0" }, { capabilities: { tools: {} } });
+    instance.state = this.state; // shared reference — mutations visible across clones
+    instance.server = new Server(this.state.serverInfo, { capabilities: { tools: {} } });
     instance.httpClient = requestHeaders ? this.httpClient.withHeaders(requestHeaders) : this.httpClient;
     instance.tools = this.tools;
     instance.openApiLookup = this.openApiLookup;

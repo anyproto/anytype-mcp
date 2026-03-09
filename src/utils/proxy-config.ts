@@ -78,4 +78,4 @@ export const mcpProxyConfig: McpProxyConfig = McpProxyConfigSchema.parse({
   anytypeApiBaseUrl: process.env.ANYTYPE_API_BASE_URL,
   openApiHeaders: process.env.OPENAPI_MCP_HEADERS,
   passthroughHeaders: process.env.MCP_PASSTHROUGH_HEADERS,
-});
+} satisfies { [key in keyof McpProxyConfig]: unknown });
