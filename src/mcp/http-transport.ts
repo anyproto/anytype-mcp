@@ -1,6 +1,5 @@
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import http from "node:http";
-import { mcpProxyConfig } from "../utils/proxy-config";
 import { MCPProxy } from "./proxy";
 
 export const CORS_HEADERS = {
@@ -18,36 +17,50 @@ export function applyCorsHeaders(req: http.IncomingMessage, res: http.ServerResp
   Object.entries(CORS_HEADERS).forEach(([k, v]) => res.setHeader(k, v));
 }
 
-export async function startHttpTransport(proxy: MCPProxy, host: string, port: number): Promise<void> {
+export async function startHttpTransport(
+  proxy: MCPProxy,
+  host: string,
+  port: number,
+  passthroughHeaders: string[],
+): Promise<void> {
   const server = http.createServer(async (req, res) => {
     const { method, url } = req;
     console.error(`[http] ${method} ${url}`);
 
     applyCorsHeaders(req, res);
 
-    if (url === MCP_HTTP_PATH) {
-      if (method === "OPTIONS") {
+    if (url !== MCP_HTTP_PATH) {
+      res.writeHead(404, { "Content-Type": "text/plain" });
+      res.end("Not Found");
+      return;
+    }
+
+    switch (method) {
+      case "OPTIONS":
         res.writeHead(204);
         res.end();
-      } else if (method === "GET" || method === "POST") {
-        // Stateless mode: fresh transport + fresh Server per request
+        break;
+
+      case "GET":
+      case "POST": {
         // Forward only whitelisted headers from MCP client to upstream Anytype API
         const requestHeaders: Record<string, string> = {};
-        for (const name of mcpProxyConfig.passthroughHeaders) {
+        for (const name of passthroughHeaders) {
           const value = req.headers[name];
           if (typeof value === "string") requestHeaders[name] = value;
         }
+
+        // Stateless mode: fresh transport per request
         const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
         await proxy.clone(requestHeaders).connect(transport);
         res.on("close", () => transport.close().catch(() => {}));
         await transport.handleRequest(req, res);
-      } else {
+        break;
+      }
+
+      default:
         res.writeHead(405, { Allow: CORS_HEADERS["Access-Control-Allow-Methods"], "Content-Type": "text/plain" });
         res.end("Method Not Allowed: MCP endpoint accepts POST only");
-      }
-    } else {
-      res.writeHead(404, { "Content-Type": "text/plain" });
-      res.end("Not Found");
     }
   });
 

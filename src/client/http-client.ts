@@ -5,11 +5,8 @@ import { Headers } from "node-fetch";
 import OpenAPIClientAxios from "openapi-client-axios";
 import type { OpenAPIV3, OpenAPIV3_1 } from "openapi-types";
 import { isFileUploadParameter } from "../openapi/file-upload";
-
-export type HttpClientConfig = {
-  baseUrl: string;
-  headers?: Record<string, string>;
-};
+import { DEFAULT_BASE_URL } from "../utils/base-url";
+import type { HttpClientConfig } from "../utils/config";
 
 export type HttpClientResponse<T = any> = {
   data: T;
@@ -35,12 +32,13 @@ export class HttpClient {
   private baseHeaders: Record<string, string>;
 
   constructor(config: HttpClientConfig, openApiSpec: OpenAPIV3.Document | OpenAPIV3_1.Document) {
-    this.baseHeaders = config.headers ?? {};
+    this.baseHeaders = { ...config.headers };
+    const baseURL = config.baseUrl ?? (openApiSpec as OpenAPIV3.Document)?.servers?.[0]?.url ?? DEFAULT_BASE_URL;
     // @ts-expect-error OpenAPIClientAxios can be imported as default or named export, we handle both cases
     this.client = new (OpenAPIClientAxios.default ?? OpenAPIClientAxios)({
       definition: openApiSpec,
       axiosConfigDefaults: {
-        baseURL: config.baseUrl,
+        baseURL,
         headers: {
           "Content-Type": "application/json",
           "User-Agent": "anytype-mcp-server",

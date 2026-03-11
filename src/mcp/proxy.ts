@@ -3,10 +3,10 @@ import { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { CallToolRequestSchema, ListToolsRequestSchema, Tool } from "@modelcontextprotocol/sdk/types.js";
 import { Headers } from "node-fetch";
 import { OpenAPIV3 } from "openapi-types";
+import pkg from "../../package.json";
 import { HttpClient, HttpClientError } from "../client/http-client";
 import { OpenAPIToMCPConverter, type ToolMethod } from "../openapi/parser";
-import { determineBaseUrl } from "../utils/base-url";
-import { mcpProxyConfig } from "../utils/proxy-config";
+import { getConfig } from "../utils/config";
 
 type PathItemObject = OpenAPIV3.PathItemObject & {
   get?: OpenAPIV3.OperationObject;
@@ -21,22 +21,20 @@ export class MCPProxy {
   private httpClient: HttpClient;
   private methods: Record<string, ToolMethod[]>;
   private openApiLookup: Record<string, OpenAPIV3.OperationObject & { method: string; path: string }>;
-  private state = {
-    toolsLogged: false,
-    serverInfo: { name: "", version: "" },
+  private state: {
+    toolsLogged: boolean;
+    serverInfo: ConstructorParameters<typeof Server>[0];
+    serverOptions: NonNullable<ConstructorParameters<typeof Server>[1]>;
   };
 
   constructor(name: string, openApiSpec: OpenAPIV3.Document) {
-    this.state.serverInfo = { name, version: openApiSpec.info.version };
-    this.server = new Server(this.state.serverInfo, { capabilities: { tools: {} } });
-    const baseUrl = determineBaseUrl(openApiSpec);
-    this.httpClient = new HttpClient(
-      {
-        baseUrl,
-        headers: mcpProxyConfig.openApiHeaders,
-      },
-      openApiSpec,
-    );
+    this.state = {
+      toolsLogged: false,
+      serverInfo: { name, version: pkg.version, description: `Anytype API proxy (spec v${openApiSpec.info.version})` },
+      serverOptions: { capabilities: { tools: {} } },
+    };
+    this.server = new Server(this.state.serverInfo, this.state.serverOptions);
+    this.httpClient = new HttpClient(getConfig().httpClient, openApiSpec);
 
     // Convert OpenAPI spec to MCP tools
     const converter = new OpenAPIToMCPConverter(openApiSpec, {
@@ -178,7 +176,7 @@ export class MCPProxy {
   clone(requestHeaders?: Record<string, string>): MCPProxy {
     const instance = Object.create(MCPProxy.prototype) as MCPProxy;
     instance.state = this.state; // shared reference — mutations visible across clones
-    instance.server = new Server(this.state.serverInfo, { capabilities: { tools: {} } });
+    instance.server = new Server(this.state.serverInfo, this.state.serverOptions);
     instance.httpClient = requestHeaders ? this.httpClient.withHeaders(requestHeaders) : this.httpClient;
     instance.tools = this.tools;
     instance.openApiLookup = this.openApiLookup;

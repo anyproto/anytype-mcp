@@ -140,9 +140,9 @@ describe("MCPProxy", () => {
   });
 
   describe("openApiHeaders", () => {
-    it("should pass headers from mcpProxyConfig to HttpClient", () => {
-      // Headers parsing and validation are tested in proxy-config.test.ts.
-      // Here we only verify that MCPProxy forwards whatever mcpProxyConfig provides.
+    it("should pass httpClient config from getConfig() to HttpClient", () => {
+      // Config parsing is tested in proxy-config.test.ts.
+      // Here we only verify that MCPProxy forwards getConfig().httpClient as-is.
       new MCPProxy("test-proxy", mockOpenApiSpec);
       expect(HttpClient).toHaveBeenCalledWith(
         expect.objectContaining({ headers: expect.any(Object) }),
@@ -153,11 +153,11 @@ describe("MCPProxy", () => {
 
   describe("base URL integration", () => {
     // Base URL resolution priority is tested in base-url.test.ts.
-    // Here we verify MCPProxy passes the resolved URL to HttpClient.
-    it("should pass resolved base URL to HttpClient", () => {
+    // Here we verify MCPProxy passes getConfig().httpClient to HttpClient (baseUrl may be undefined).
+    it("should pass httpClient config to HttpClient", () => {
       new MCPProxy("test-proxy", mockOpenApiSpec);
       expect(HttpClient).toHaveBeenCalledWith(
-        expect.objectContaining({ baseUrl: expect.stringMatching(/^https?:\/\//) }),
+        expect.objectContaining({ headers: expect.any(Object) }),
         expect.anything(),
       );
     });
