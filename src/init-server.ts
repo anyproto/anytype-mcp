@@ -5,8 +5,8 @@ import path from "node:path";
 import { OpenAPIV3 } from "openapi-types";
 import { startHttpTransport } from "./mcp/http-transport";
 import { MCPProxy } from "./mcp/proxy";
-import { getDefaultSpecUrl } from "./utils/base-url";
-import { mcpProxyConfig } from "./utils/proxy-config";
+import { resolveSpecPath } from "./utils/base-url";
+import { getConfig } from "./utils/config";
 
 export class ValidationError extends Error {
   constructor(public errors: any[]) {
@@ -15,9 +15,9 @@ export class ValidationError extends Error {
   }
 }
 
-export async function loadOpenApiSpec(specPath?: string): Promise<OpenAPIV3.Document> {
-  const finalSpec = specPath || getDefaultSpecUrl();
-  let rawSpec: string;
+export async function loadOpenApiSpec(): Promise<OpenAPIV3.Document> {
+  const finalSpec = resolveSpecPath();
+  let rawSpec: string | undefined;
 
   if (finalSpec.startsWith("http://") || finalSpec.startsWith("https://")) {
     try {
@@ -49,13 +49,14 @@ export async function loadOpenApiSpec(specPath?: string): Promise<OpenAPIV3.Docu
   }
 }
 
-export async function initProxy(specPath: string) {
+export async function initProxy() {
   console.error("Initializing Anytype MCP Server...");
-  const openApiSpec = await loadOpenApiSpec(specPath);
+  const openApiSpec = await loadOpenApiSpec();
   const proxy = new MCPProxy("Anytype API", openApiSpec);
-  const { transport: transportConfig } = mcpProxyConfig;
+  const { transport: transportConfig } = getConfig();
   if (transportConfig.type === "http") {
-    await startHttpTransport(proxy, transportConfig.host, transportConfig.port);
+    const { host, port, passthroughHeaders } = transportConfig;
+    await startHttpTransport(proxy, host, port, passthroughHeaders);
   } else {
     await proxy.connect(new StdioServerTransport());
   }

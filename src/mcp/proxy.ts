@@ -6,8 +6,7 @@ import { Headers } from "node-fetch";
 import { OpenAPIV3 } from "openapi-types";
 import { HttpClient, HttpClientError } from "../client/http-client";
 import { OpenAPIToMCPConverter } from "../openapi/parser";
-import { determineBaseUrl } from "../utils/base-url";
-import { mcpProxyConfig } from "../utils/proxy-config";
+import { getConfig } from "../utils/config";
 
 type PathItemObject = OpenAPIV3.PathItemObject & {
   get?: OpenAPIV3.OperationObject;
@@ -39,14 +38,7 @@ export class MCPProxy {
   constructor(name: string, openApiSpec: OpenAPIV3.Document) {
     this.state.serverInfo = { name, version: openApiSpec.info.version };
     this.server = new Server(this.state.serverInfo, { capabilities: { tools: {} } });
-    const baseUrl = determineBaseUrl(openApiSpec);
-    this.httpClient = new HttpClient(
-      {
-        baseUrl,
-        headers: mcpProxyConfig.openApiHeaders,
-      },
-      openApiSpec,
-    );
+    this.httpClient = new HttpClient(getConfig().httpClient, openApiSpec);
 
     // Convert OpenAPI spec to MCP tools
     const converter = new OpenAPIToMCPConverter(openApiSpec);
