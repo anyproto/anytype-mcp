@@ -32,7 +32,7 @@ export class HttpClient {
   private baseHeaders: Record<string, string>;
 
   constructor(config: HttpClientConfig, openApiSpec: OpenAPIV3.Document | OpenAPIV3_1.Document) {
-    this.baseHeaders = config.headers ?? {};
+    this.baseHeaders = { ...config.headers };
     const baseURL = config.baseUrl ?? (openApiSpec as OpenAPIV3.Document)?.servers?.[0]?.url ?? DEFAULT_BASE_URL;
     // @ts-expect-error OpenAPIClientAxios can be imported as default or named export, we handle both cases
     this.client = new (OpenAPIClientAxios.default ?? OpenAPIClientAxios)({

@@ -4,6 +4,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema, Tool } from "@modelconte
 import { JSONSchema7 as IJsonSchema } from "json-schema";
 import { Headers } from "node-fetch";
 import { OpenAPIV3 } from "openapi-types";
+import pkg from "../../package.json";
 import { HttpClient, HttpClientError } from "../client/http-client";
 import { OpenAPIToMCPConverter } from "../openapi/parser";
 import { getConfig } from "../utils/config";
@@ -30,14 +31,19 @@ export class MCPProxy {
   private httpClient: HttpClient;
   private tools: Record<string, NewToolDefinition>;
   private openApiLookup: Record<string, OpenAPIV3.OperationObject & { method: string; path: string }>;
-  private state = {
-    toolsLogged: false,
-    serverInfo: { name: "", version: "" },
+  private state: {
+    toolsLogged: boolean;
+    serverInfo: ConstructorParameters<typeof Server>[0];
+    serverOptions: NonNullable<ConstructorParameters<typeof Server>[1]>;
   };
 
   constructor(name: string, openApiSpec: OpenAPIV3.Document) {
-    this.state.serverInfo = { name, version: openApiSpec.info.version };
-    this.server = new Server(this.state.serverInfo, { capabilities: { tools: {} } });
+    this.state = {
+      toolsLogged: false,
+      serverInfo: { name, version: pkg.version, description: `Anytype API proxy (spec v${openApiSpec.info.version})` },
+      serverOptions: { capabilities: { tools: {} } },
+    };
+    this.server = new Server(this.state.serverInfo, this.state.serverOptions);
     this.httpClient = new HttpClient(getConfig().httpClient, openApiSpec);
 
     // Convert OpenAPI spec to MCP tools
@@ -161,7 +167,7 @@ export class MCPProxy {
   clone(requestHeaders?: Record<string, string>): MCPProxy {
     const instance = Object.create(MCPProxy.prototype) as MCPProxy;
     instance.state = this.state; // shared reference — mutations visible across clones
-    instance.server = new Server(this.state.serverInfo, { capabilities: { tools: {} } });
+    instance.server = new Server(this.state.serverInfo, this.state.serverOptions);
     instance.httpClient = requestHeaders ? this.httpClient.withHeaders(requestHeaders) : this.httpClient;
     instance.tools = this.tools;
     instance.openApiLookup = this.openApiLookup;
