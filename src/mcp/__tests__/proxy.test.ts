@@ -1,7 +1,7 @@
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { Headers } from "node-fetch";
 import { OpenAPIV3 } from "openapi-types";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { HttpClient } from "../../client/http-client";
 import { MCPProxy } from "../proxy";
 
@@ -139,88 +139,27 @@ describe("MCPProxy", () => {
     });
   });
 
-  describe("parseHeadersFromEnv", () => {
-    const originalEnv = process.env;
-    const expectHeaders = (headers: Record<string, string>) => {
-      expect(HttpClient).toHaveBeenCalledWith(expect.objectContaining({ headers }), expect.anything());
-    };
-
-    beforeEach(() => {
-      process.env = { ...originalEnv };
-    });
-
-    afterEach(() => {
-      process.env = originalEnv;
-    });
-
-    it("should parse valid JSON headers from env", () => {
-      process.env.OPENAPI_MCP_HEADERS = JSON.stringify({
-        Authorization: "Bearer token123",
-        "X-Custom-Header": "test",
-      });
+  describe("openApiHeaders", () => {
+    it("should pass httpClient config from getConfig() to HttpClient", () => {
+      // Config parsing is tested in proxy-config.test.ts.
+      // Here we only verify that MCPProxy forwards getConfig().httpClient as-is.
       new MCPProxy("test-proxy", mockOpenApiSpec);
-      expectHeaders({ Authorization: "Bearer token123", "X-Custom-Header": "test" });
-    });
-
-    it("should return empty object when env var is not set", () => {
-      delete process.env.OPENAPI_MCP_HEADERS;
-      new MCPProxy("test-proxy", mockOpenApiSpec);
-      expectHeaders({});
-    });
-
-    it("should return empty object and warn on invalid JSON", () => {
-      const consoleSpy = vi.spyOn(console, "warn");
-      process.env.OPENAPI_MCP_HEADERS = "invalid json";
-      new MCPProxy("test-proxy", mockOpenApiSpec);
-      expectHeaders({});
-      expect(consoleSpy).toHaveBeenCalledWith(
-        "Failed to parse OPENAPI_MCP_HEADERS environment variable:",
-        expect.any(Error),
-      );
-    });
-
-    it("should return empty object and warn on non-object JSON", () => {
-      const consoleSpy = vi.spyOn(console, "warn");
-      process.env.OPENAPI_MCP_HEADERS = '"string"';
-      new MCPProxy("test-proxy", mockOpenApiSpec);
-      expectHeaders({});
-      expect(consoleSpy).toHaveBeenCalledWith(
-        "OPENAPI_MCP_HEADERS environment variable must be a JSON object, got:",
-        "string",
+      expect(HttpClient).toHaveBeenCalledWith(
+        expect.objectContaining({ headers: expect.any(Object) }),
+        expect.anything(),
       );
     });
   });
 
   describe("base URL integration", () => {
-    const originalEnv = process.env;
-    const expectBaseUrl = (url: string) => {
-      expect(HttpClient).toHaveBeenCalledWith(expect.objectContaining({ baseUrl: url }), expect.anything());
-    };
-
-    beforeEach(() => {
-      process.env = { ...originalEnv };
-    });
-
-    afterEach(() => {
-      process.env = originalEnv;
-    });
-
-    it("should use ANYTYPE_API_BASE_URL when set", () => {
-      process.env.ANYTYPE_API_BASE_URL = "http://localhost:31012";
+    // Base URL resolution priority is tested in base-url.test.ts.
+    // Here we verify MCPProxy passes getConfig().httpClient to HttpClient (baseUrl may be undefined).
+    it("should pass httpClient config to HttpClient", () => {
       new MCPProxy("test-proxy", mockOpenApiSpec);
-      expectBaseUrl("http://localhost:31012");
-    });
-
-    it("should use spec servers when env var not set", () => {
-      delete process.env.ANYTYPE_API_BASE_URL;
-      new MCPProxy("test-proxy", mockOpenApiSpec);
-      expectBaseUrl("http://localhost:3000");
-    });
-
-    it("should use default when neither env var nor spec servers available", () => {
-      delete process.env.ANYTYPE_API_BASE_URL;
-      new MCPProxy("test-proxy", createMockOpenApiSpec({ servers: undefined }));
-      expectBaseUrl("http://127.0.0.1:31009");
+      expect(HttpClient).toHaveBeenCalledWith(
+        expect.objectContaining({ headers: expect.any(Object) }),
+        expect.anything(),
+      );
     });
   });
 

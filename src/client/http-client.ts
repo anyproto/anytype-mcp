@@ -1,15 +1,12 @@
-import type { AxiosInstance } from "axios";
+import axios, { type AxiosInstance } from "axios";
 import FormData from "form-data";
 import fs from "fs";
 import { Headers } from "node-fetch";
 import OpenAPIClientAxios from "openapi-client-axios";
 import type { OpenAPIV3, OpenAPIV3_1 } from "openapi-types";
 import { isFileUploadParameter } from "../openapi/file-upload";
-
-export type HttpClientConfig = {
-  baseUrl: string;
-  headers?: Record<string, string>;
-};
+import { DEFAULT_BASE_URL } from "../utils/base-url";
+import type { HttpClientConfig } from "../utils/config";
 
 export type HttpClientResponse<T = any> = {
   data: T;
@@ -32,28 +29,42 @@ export class HttpClientError extends Error {
 export class HttpClient {
   private api: Promise<AxiosInstance>;
   private client: OpenAPIClientAxios;
+  private baseHeaders: Record<string, string>;
 
   constructor(config: HttpClientConfig, openApiSpec: OpenAPIV3.Document | OpenAPIV3_1.Document) {
+    this.baseHeaders = { ...config.headers };
+    const baseURL = config.baseUrl ?? (openApiSpec as OpenAPIV3.Document)?.servers?.[0]?.url ?? DEFAULT_BASE_URL;
     // @ts-expect-error OpenAPIClientAxios can be imported as default or named export, we handle both cases
     this.client = new (OpenAPIClientAxios.default ?? OpenAPIClientAxios)({
       definition: openApiSpec,
       axiosConfigDefaults: {
-        baseURL: config.baseUrl,
+        baseURL,
         headers: {
           "Content-Type": "application/json",
           "User-Agent": "anytype-mcp-server",
-          ...config.headers,
+          ...this.baseHeaders,
         },
       },
     });
     this.api = this.client.init();
   }
 
+  /**
+   * Returns a new HttpClient that merges the given headers into every request.
+   * Per-request headers (e.g. Authorization passthrough) take precedence over base headers.
+   */
+  withHeaders(headers: Record<string, string>): HttpClient {
+    const clone = Object.create(HttpClient.prototype) as HttpClient;
+    clone.baseHeaders = { ...this.baseHeaders, ...headers };
+    clone.client = this.client;
+    clone.api = this.api;
+    return clone;
+  }
+
   private async prepareFileUpload(
     operation: OpenAPIV3.OperationObject,
     params: Record<string, any>,
   ): Promise<FormData | null> {
-    console.error("prepareFileUpload", { operation, params });
     const fileParams = isFileUploadParameter(operation);
     if (fileParams.length === 0) return null;
 
@@ -61,7 +72,6 @@ export class HttpClient {
 
     // Handle file uploads
     for (const param of fileParams) {
-      console.error(`extracting ${param}`, { params });
       const filePath = params[param];
       if (!filePath) {
         throw new Error(`File path must be provided for parameter: ${param}`);
@@ -163,15 +173,13 @@ export class HttpClient {
         : { ...(hasBody ? { "Content-Type": "application/json" } : { "Content-Type": null }) };
       const requestConfig = {
         headers: {
+          ...this.baseHeaders,
           ...headers,
         },
       };
 
       // first argument is url parameters, second is body parameters
-      console.error("calling operation", { operationId, urlParameters, bodyParams, requestConfig });
       const response = await operationFn(urlParameters, hasBody ? bodyParams : undefined, requestConfig);
-
-      console.error("operation finished");
       // Convert axios headers to Headers object
       const responseHeaders = new Headers();
       Object.entries(response.headers).forEach(([key, value]) => {
@@ -184,13 +192,20 @@ export class HttpClient {
         headers: responseHeaders,
       };
     } catch (error: any) {
-      if (error.response) {
-        console.error("Error in http client", error);
+      if (axios.isAxiosError(error) && error.response) {
         const headers = new Headers();
         Object.entries(error.response.headers).forEach(([key, value]) => {
           if (value) headers.append(key, value.toString());
         });
-
+        console.error("HTTP error", {
+          operationId,
+          status: error.response.status,
+          statusText: error.response.statusText,
+          data: error.response.data,
+          requestUrl: error.config?.url,
+          requestMethod: error.config?.method,
+          requestData: error.config?.data,
+        });
         throw new HttpClientError(
           error.response.statusText || "Request failed",
           error.response.status,
