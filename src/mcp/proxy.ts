@@ -1,11 +1,10 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { CallToolRequestSchema, ListToolsRequestSchema, Tool } from "@modelcontextprotocol/sdk/types.js";
-import { JSONSchema7 as IJsonSchema } from "json-schema";
 import { Headers } from "node-fetch";
 import { OpenAPIV3 } from "openapi-types";
 import { HttpClient, HttpClientError } from "../client/http-client";
-import { OpenAPIToMCPConverter } from "../openapi/parser";
+import { OpenAPIToMCPConverter, type ToolMethod } from "../openapi/parser";
 import { determineBaseUrl } from "../utils/base-url";
 
 type PathItemObject = OpenAPIV3.PathItemObject & {
@@ -16,19 +15,10 @@ type PathItemObject = OpenAPIV3.PathItemObject & {
   patch?: OpenAPIV3.OperationObject;
 };
 
-type NewToolDefinition = {
-  methods: Array<{
-    name: string;
-    description: string;
-    inputSchema: IJsonSchema & { type: "object" };
-    outputSchema?: IJsonSchema;
-  }>;
-};
-
 export class MCPProxy {
   private server: Server;
   private httpClient: HttpClient;
-  private tools: Record<string, NewToolDefinition>;
+  private methods: Record<string, ToolMethod[]>;
   private openApiLookup: Record<string, OpenAPIV3.OperationObject & { method: string; path: string }>;
 
   constructor(name: string, openApiSpec: OpenAPIV3.Document) {
@@ -43,9 +33,12 @@ export class MCPProxy {
     );
 
     // Convert OpenAPI spec to MCP tools
-    const converter = new OpenAPIToMCPConverter(openApiSpec);
-    const { tools, openApiLookup } = converter.convertToMCPTools();
-    this.tools = tools;
+    const converter = new OpenAPIToMCPConverter(openApiSpec, {
+      skipToolNamePrefix: true,
+      stripErrResponseDescriptions: true,
+    });
+    const { methods, openApiLookup } = converter.convertToMCPTools();
+    this.methods = methods;
     this.openApiLookup = openApiLookup;
 
     this.setupHandlers();
@@ -54,17 +47,33 @@ export class MCPProxy {
   private setupHandlers() {
     // Handle tool listing
     this.server.setRequestHandler(ListToolsRequestSchema, async () => {
-      const tools: Tool[] = [];
+      const toolsByMethodName = new Map<string, { toolName: string; method: ToolMethod }[]>();
 
       // Add methods as separate tools to match the MCP format
-      Object.entries(this.tools).forEach(([toolName, def]) => {
-        def.methods.forEach((method) => {
-          const toolNameWithMethod = `${toolName}-${method.name}`;
+      Object.entries(this.methods).forEach(([toolName, methods]) => {
+        methods.forEach((method) => {
+          const methodName = method.name;
+          let bucket = toolsByMethodName.get(methodName);
+          if (!bucket) {
+            bucket = [];
+            toolsByMethodName.set(methodName, bucket);
+          }
+          bucket.push({ toolName, method });
+        });
+      });
+
+      const tools: Tool[] = [];
+
+      toolsByMethodName.forEach((bucket) => {
+        const isCollision = bucket.length > 1;
+        bucket.forEach(({ toolName, method }) => {
+          const toolNameWithMethod = isCollision ? `${toolName}-${method.name}` : method.name;
           const truncatedToolName = this.truncateToolName(toolNameWithMethod);
           tools.push({
             name: truncatedToolName,
             description: method.description,
             inputSchema: method.inputSchema as Tool["inputSchema"],
+            annotations: method.annotations,
           });
         });
       });
