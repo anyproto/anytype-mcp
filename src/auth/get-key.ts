@@ -60,7 +60,7 @@ export class ApiKeyGenerator {
       return response.data.challenge_id;
     } catch (error) {
       console.error("Authentication error:", error instanceof Error ? error.message : error);
-      throw new Error("Failed to start authentication");
+      throw new Error("Failed to start authentication", { cause: error });
     }
   }
 
@@ -87,7 +87,7 @@ export class ApiKeyGenerator {
       return { apiKey: response.data.api_key, anytypeVersion: response.headers["anytype-version"] };
     } catch (error) {
       console.error("Authentication error:", error instanceof Error ? error.message : error);
-      throw new Error("Failed to complete authentication");
+      throw new Error("Failed to complete authentication", { cause: error });
     }
   }
 

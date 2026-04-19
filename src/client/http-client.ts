@@ -89,7 +89,7 @@ export class HttpClient {
           const fileStream = fs.createReadStream(filePath);
           formData.append(name, fileStream);
         } catch (error) {
-          throw new Error(`Failed to read file at ${filePath}: ${error}`);
+          throw new Error(`Failed to read file at ${filePath}: ${error}`, { cause: error });
         }
       }
     }
