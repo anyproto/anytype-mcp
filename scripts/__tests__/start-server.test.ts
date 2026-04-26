@@ -3,6 +3,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadOpenApiSpec, ValidationError } from "../../src/init-server";
+import { overrideSpecPath } from "../../src/utils/base-url";
+
+// Reset specPathOverride after each test to avoid inter-test contamination
+afterEach(() => overrideSpecPath(undefined));
 
 // Mock fs and axios
 vi.mock("node:fs");
@@ -72,8 +76,9 @@ describe("loadOpenApiSpec", () => {
     it("should load a valid OpenAPI spec from local file", async () => {
       // Mock fs.readFileSync to return a valid spec
       vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(validOpenApiSpec));
+      overrideSpecPath("./test-spec.json");
 
-      const result = await loadOpenApiSpec("./test-spec.json");
+      const result = await loadOpenApiSpec();
 
       expect(result).toEqual(validOpenApiSpec);
       expect(fs.readFileSync).toHaveBeenCalledWith(path.resolve(process.cwd(), "./test-spec.json"), "utf-8");
@@ -84,11 +89,12 @@ describe("loadOpenApiSpec", () => {
       vi.mocked(fs.readFileSync).mockImplementation(() => {
         throw new Error("ENOENT: no such file or directory");
       });
+      overrideSpecPath("./non-existent.json");
 
       // Mock process.exit to prevent actual exit
       const mockExit = vi.spyOn(process, "exit").mockImplementation((() => {}) as any);
 
-      await loadOpenApiSpec("./non-existent.json");
+      await loadOpenApiSpec();
 
       expect(console.error).toHaveBeenCalledWith("Failed to read OpenAPI specification file:", expect.any(String));
       expect(mockExit).toHaveBeenCalledWith(1);
@@ -97,11 +103,12 @@ describe("loadOpenApiSpec", () => {
     it("should handle invalid JSON", async () => {
       // Mock fs.readFileSync to return invalid JSON
       vi.mocked(fs.readFileSync).mockReturnValue("invalid json");
+      overrideSpecPath("./invalid.json");
 
       // Mock process.exit
       const mockExit = vi.spyOn(process, "exit").mockImplementation((() => {}) as any);
 
-      await loadOpenApiSpec("./invalid.json");
+      await loadOpenApiSpec();
 
       expect(console.error).toHaveBeenCalledWith("Failed to parse OpenAPI specification:", expect.any(String));
       expect(mockExit).toHaveBeenCalledWith(1);
@@ -111,8 +118,9 @@ describe("loadOpenApiSpec", () => {
       // Mock fs.readFileSync to return a valid YAML spec
       const yamlSpec = JSON.stringify(validOpenApiSpec);
       vi.mocked(fs.readFileSync).mockReturnValue(yamlSpec);
+      overrideSpecPath("./test-spec.yaml");
 
-      const result = await loadOpenApiSpec("./test-spec.yaml");
+      const result = await loadOpenApiSpec();
 
       expect(result).toEqual(validOpenApiSpec);
       expect(fs.readFileSync).toHaveBeenCalledWith(path.resolve(process.cwd(), "./test-spec.yaml"), "utf-8");
@@ -121,11 +129,12 @@ describe("loadOpenApiSpec", () => {
     it("should handle invalid YAML", async () => {
       // Mock fs.readFileSync to return invalid YAML
       vi.mocked(fs.readFileSync).mockReturnValue("invalid: yaml: :");
+      overrideSpecPath("./invalid.yaml");
 
       // Mock process.exit
       const mockExit = vi.spyOn(process, "exit").mockImplementation((() => {}) as any);
 
-      await loadOpenApiSpec("./invalid.yaml");
+      await loadOpenApiSpec();
 
       expect(console.error).toHaveBeenCalledWith("Failed to parse OpenAPI specification:", expect.any(String));
       expect(mockExit).toHaveBeenCalledWith(1);
@@ -136,8 +145,9 @@ describe("loadOpenApiSpec", () => {
     it("should load a valid OpenAPI spec from URL", async () => {
       // Mock axios.get to return a valid spec
       vi.mocked(axios.get).mockResolvedValue({ data: validOpenApiSpec });
+      overrideSpecPath("http://example.com/api-spec.json");
 
-      const result = await loadOpenApiSpec("http://example.com/api-spec.json");
+      const result = await loadOpenApiSpec();
 
       expect(result).toEqual(validOpenApiSpec);
       expect(axios.get).toHaveBeenCalledWith("http://example.com/api-spec.json");
@@ -146,11 +156,12 @@ describe("loadOpenApiSpec", () => {
     it("should handle network errors", async () => {
       // Mock axios.get to throw network error
       vi.mocked(axios.get).mockRejectedValue(new Error("Network Error"));
+      overrideSpecPath("http://example.com/api-spec.json");
 
       // Mock process.exit
       const mockExit = vi.spyOn(process, "exit").mockImplementation((() => {}) as any);
 
-      await loadOpenApiSpec("http://example.com/api-spec.json");
+      await loadOpenApiSpec();
 
       expect(console.error).toHaveBeenCalledWith("Failed to fetch OpenAPI specification from URL:", "Network Error");
       expect(mockExit).toHaveBeenCalledWith(1);
@@ -159,11 +170,12 @@ describe("loadOpenApiSpec", () => {
     it("should handle invalid response data", async () => {
       // Mock axios.get to return invalid data
       vi.mocked(axios.get).mockResolvedValue({ data: "invalid data" });
+      overrideSpecPath("http://example.com/api-spec.json");
 
       // Mock process.exit
       const mockExit = vi.spyOn(process, "exit").mockImplementation((() => {}) as any);
 
-      await loadOpenApiSpec("http://example.com/api-spec.json");
+      await loadOpenApiSpec();
 
       expect(console.error).toHaveBeenCalledWith("Failed to parse OpenAPI specification:", expect.any(String));
       expect(mockExit).toHaveBeenCalledWith(1);
@@ -173,8 +185,9 @@ describe("loadOpenApiSpec", () => {
       // Mock axios.get to return a valid YAML spec
       const yamlSpec = JSON.stringify(validOpenApiSpec);
       vi.mocked(axios.get).mockResolvedValue({ data: yamlSpec });
+      overrideSpecPath("http://example.com/api-spec.yaml");
 
-      const result = await loadOpenApiSpec("http://example.com/api-spec.yaml");
+      const result = await loadOpenApiSpec();
 
       expect(result).toEqual(validOpenApiSpec);
       expect(axios.get).toHaveBeenCalledWith("http://example.com/api-spec.yaml");

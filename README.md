@@ -95,6 +95,17 @@ npm install -g @anyproto/anytype-mcp
 
 </details>
 
+## Environment Variables
+
+| Variable                  | Default                         | Description                                                                                                                                                                         |
+| ------------------------- | ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `OPENAPI_MCP_HEADERS`     | —                               | JSON object of headers forwarded to the Anytype API on every request. Required for auth: `{"Authorization":"Bearer <key>", "Anytype-Version":"2025-11-08"}`                         |
+| `ANYTYPE_API_BASE_URL`    | `http://127.0.0.1:31009`        | Anytype API base URL. Set to `http://localhost:31012` for `anytype-cli`.                                                                                                            |
+| `MCP_TRANSPORT`           | `stdio`                         | Transport mode. Set to `http` to enable the Streamable HTTP server.                                                                                                                 |
+| `MCP_HOST`                | `127.0.0.1`                     | Host to bind when `MCP_TRANSPORT=http`.                                                                                                                                             |
+| `MCP_PORT`                | `3666`                          | Port to listen on when `MCP_TRANSPORT=http`. Must be in range 1024–65535.                                                                                                           |
+| `MCP_PASSTHROUGH_HEADERS` | `authorization,anytype-version` | Comma-separated list of inbound HTTP header names (lowercase) forwarded from the MCP HTTP client to the Anytype API. Extend with caution — arbitrary headers must not be forwarded. |
+
 ### Custom API Base URL
 
 By default, the server connects to `http://127.0.0.1:31009`. For `anytype-cli` (port `31012`) or other custom base URLs, set `ANYTYPE_API_BASE_URL`:
@@ -103,6 +114,7 @@ By default, the server connects to `http://127.0.0.1:31009`. For `anytype-cli` (
 <summary>Example Configuration</summary>
 
 **MCP Client (Claude Desktop, Cursor, etc.):**
+
 ```json
 {
   "mcpServers": {
@@ -119,6 +131,7 @@ By default, the server connects to `http://127.0.0.1:31009`. For `anytype-cli` (
 ```
 
 **Claude Code (CLI):**
+
 ```bash
 claude mcp add anytype \
   -e ANYTYPE_API_BASE_URL='http://localhost:31012' \
@@ -165,6 +178,18 @@ npm run build
 ```bash
 npm link
 ```
+
+### Running in HTTP Transport Mode
+
+Useful for browser-based clients such as [MCP Inspector](https://github.com/modelcontextprotocol/inspector):
+
+```bash
+MCP_TRANSPORT=http MCP_HOST=127.0.0.1 MCP_PORT=3666 npm run dev
+```
+
+Then connect your MCP client to `http://127.0.0.1:3666/mcp`.
+
+Auth is passed through from the MCP client — set `Authorization: Bearer <YOUR_API_KEY>` and `Anytype-Version: 2025-11-08` in your client's request headers. Alternatively, set `OPENAPI_MCP_HEADERS` as with stdio mode.
 
 ## Contribution
 
