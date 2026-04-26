@@ -24,6 +24,18 @@
   "bin": {
     "anytype-mcp": "bin/cli.mjs"
   },
+  "files": [
+    "bin",
+    "README.md",
+    "LICENSE.md"
+  ],
+  "main": "bin/cli.mjs",
+  "exports": {
+    ".": "./bin/cli.mjs"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.29.0",
     "axios": "1.15.0",

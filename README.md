@@ -126,6 +126,12 @@ claude mcp add anytype \
   -s user -- npx -y @anyproto/anytype-mcp
 ```
 
+**MCP Server in a container:**
+Sometimes, Anytype MCP Server runs in a Docker container, f.x. in [ToolHive](https://docs.stacklok.com/toolhive/guides-ui/run-mcp-servers). In this case, `ANYTYPE_API_BASE_URL` must point to the host machine, where Anytype API runs:
+```bash
+ANYTYPE_API_BASE_URL=http://host.docker.internal:31009
+```
+
 </details>
 
 ## Example Interactions
