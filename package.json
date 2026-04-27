@@ -36,15 +36,15 @@
     "zod": "4.3.6"
   },
   "devDependencies": {
-    "@anthropic-ai/sdk": "0.90.0",
+    "@anthropic-ai/sdk": "0.91.1",
     "@eslint/js": "10.0.1",
     "@types/json-schema": "7.0.15",
     "@types/mustache": "4.2.6",
     "@types/node": "25.6.0",
     "@types/which": "3.0.4",
     "@vitest/coverage-v8": "4.1.4",
-    "@typescript-eslint/eslint-plugin": "8.58.2",
-    "@typescript-eslint/parser": "8.58.2",
+    "@typescript-eslint/eslint-plugin": "8.59.1",
+    "@typescript-eslint/parser": "8.59.1",
     "eslint": "10.2.1",
     "esbuild": "0.28.0",
     "openai": "6.34.0",
