@@ -1,30 +1,8 @@
-import { URL } from "node:url";
 import { OpenAPIV3 } from "openapi-types";
+import { getConfig } from "./config";
 
-/**
- * Parses the ANYTYPE_API_BASE_URL environment variable and returns the origin.
- * Returns null if not set, invalid, or uses an unsupported protocol.
- */
-export function parseBaseUrlFromEnv(): string | null {
-  const endpoint = process.env.ANYTYPE_API_BASE_URL;
-  if (!endpoint) {
-    return null;
-  }
-
-  try {
-    const url = new URL(endpoint);
-    if (url.protocol !== "http:" && url.protocol !== "https:") {
-      console.warn(
-        `ANYTYPE_API_BASE_URL must use http:// or https:// protocol, got: ${url.protocol}. Ignoring and using fallback.`,
-      );
-      return null;
-    }
-    return url.origin;
-  } catch (error) {
-    console.warn("Failed to parse ANYTYPE_API_BASE_URL environment variable:", error);
-    return null;
-  }
-}
+export const DEFAULT_BASE_URL = "http://127.0.0.1:31009";
+const DEFAULT_SPEC_PATH = "/docs/openapi.json";
 
 /**
  * Determines the base URL using priority order:
@@ -34,10 +12,10 @@ export function parseBaseUrlFromEnv(): string | null {
  */
 export function determineBaseUrl(openApiSpec?: OpenAPIV3.Document): string {
   // Priority 1: Environment variable
-  const envEndpoint = parseBaseUrlFromEnv();
-  if (envEndpoint) {
-    console.error(`Using base URL from ANYTYPE_API_BASE_URL: ${envEndpoint}`);
-    return envEndpoint;
+  const { baseUrl } = getConfig().httpClient;
+  if (baseUrl) {
+    console.error(`Using base URL from ANYTYPE_API_BASE_URL: ${baseUrl}`);
+    return baseUrl;
   }
 
   // Priority 2: OpenAPI spec servers[0].url
@@ -48,20 +26,25 @@ export function determineBaseUrl(openApiSpec?: OpenAPIV3.Document): string {
   }
 
   // Priority 3: Default fallback
-  const defaultUrl = "http://127.0.0.1:31009";
-  console.error(`Using default base URL: ${defaultUrl}`);
-  return defaultUrl;
+  console.error(`Using default base URL: ${DEFAULT_BASE_URL}`);
+  return DEFAULT_BASE_URL;
+}
+
+let specPathOverride: string | undefined;
+
+/**
+ * Sets the spec path explicitly (from CLI params).
+ */
+export function overrideSpecPath(specPath?: string) {
+  specPathOverride = specPath;
 }
 
 /**
- * Gets the default OpenAPI spec URL.
- * If ANYTYPE_API_BASE_URL is set, uses it with /docs/openapi.json suffix.
- * Otherwise, returns the default spec URL.
+ * Returns the spec path resolved in the following order:
+ * 1. From overridden, if any ({@link overrideSpecPath}),
+ * 2. From config, if any
+ * 3. Default one.
  */
-export function getDefaultSpecUrl(): string {
-  const endpoint = parseBaseUrlFromEnv();
-  if (endpoint) {
-    return `${endpoint}/docs/openapi.json`;
-  }
-  return "http://127.0.0.1:31009/docs/openapi.json";
+export function resolveSpecPath() {
+  return specPathOverride ?? `${getConfig().httpClient.baseUrl ?? DEFAULT_BASE_URL}${DEFAULT_SPEC_PATH}`;
 }

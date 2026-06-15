@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import axios from "axios";
-import fs from "fs/promises";
+import * as fs from "fs/promises";
 import { OpenAPIV3 } from "openapi-types";
 import { HttpClient, OpenAPIToMCPConverter } from "../src";
 

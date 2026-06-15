@@ -10,13 +10,7 @@ interface ToolMethod {
   outputSchema?: any;
 }
 
-interface Tool {
-  methods: ToolMethod[];
-}
-
-interface Tools {
-  [key: string]: Tool;
-}
+type Tools = Record<string, ToolMethod[]>;
 
 // Helper function to verify tool method structure without checking the exact Zod schema
 function verifyToolMethod(actual: ToolMethod, expected: any, toolName: string) {
@@ -36,8 +30,8 @@ function verifyToolMethod(actual: ToolMethod, expected: any, toolName: string) {
 function verifyTools(actual: Tools, expected: any) {
   expect(Object.keys(actual)).toEqual(Object.keys(expected));
   for (const [key, value] of Object.entries(actual)) {
-    expect(value.methods.length).toBe(expected[key].methods.length);
-    value.methods.forEach((method: ToolMethod, index: number) => {
+    expect(value.length).toBe(expected[key].methods.length);
+    value.forEach((method: ToolMethod, index: number) => {
       verifyToolMethod(method, expected[key].methods[index], key);
     });
   }
@@ -135,13 +129,13 @@ describe("OpenAPIToMCPConverter", () => {
 
     it("converts simple OpenAPI paths to MCP tools", () => {
       const converter = new OpenAPIToMCPConverter(sampleSpec);
-      const { tools, openApiLookup } = converter.convertToMCPTools();
+      const { methods, openApiLookup } = converter.convertToMCPTools();
 
-      expect(tools).toHaveProperty("API");
-      expect(tools.API.methods).toHaveLength(1);
+      expect(methods).toHaveProperty("API");
+      expect(methods.API).toHaveLength(1);
       expect(Object.keys(openApiLookup)).toHaveLength(1);
 
-      const getPetMethod = tools.API.methods.find((m) => m.name === "getPet");
+      const getPetMethod = methods.API.find((m) => m.name === "getPet");
       expect(getPetMethod).toBeDefined();
 
       const params = getParamsFromSchema(getPetMethod!);
@@ -199,9 +193,9 @@ describe("OpenAPIToMCPConverter", () => {
       };
 
       const converter = new OpenAPIToMCPConverter(specWithLongName);
-      const { tools } = converter.convertToMCPTools();
+      const { methods } = converter.convertToMCPTools();
 
-      const longNameMethod = tools.API.methods.find((m) => m.name.startsWith("a".repeat(59)));
+      const longNameMethod = methods.API.find((m) => m.name.startsWith("a".repeat(59)));
       expect(longNameMethod).toBeDefined();
       expect(longNameMethod!.name.length).toBeLessThanOrEqual(64);
     });
@@ -381,9 +375,9 @@ describe("OpenAPIToMCPConverter", () => {
 
     it("converts operations with referenced parameters", () => {
       const converter = new OpenAPIToMCPConverter(complexSpec);
-      const { tools } = converter.convertToMCPTools();
+      const { methods } = converter.convertToMCPTools();
 
-      const getPetMethod = tools.API.methods.find((m) => m.name === "getPet");
+      const getPetMethod = methods.API.find((m) => m.name === "getPet");
       expect(getPetMethod).toBeDefined();
       const params = getParamsFromSchema(getPetMethod!);
       expect(params).toContainEqual({
@@ -396,9 +390,9 @@ describe("OpenAPIToMCPConverter", () => {
 
     it("converts operations with query parameters", () => {
       const converter = new OpenAPIToMCPConverter(complexSpec);
-      const { tools } = converter.convertToMCPTools();
+      const { methods } = converter.convertToMCPTools();
 
-      const listPetsMethod = tools.API.methods.find((m) => m.name === "listPets");
+      const listPetsMethod = methods.API.find((m) => m.name === "listPets");
       expect(listPetsMethod).toBeDefined();
 
       const params = getParamsFromSchema(listPetsMethod!);
@@ -412,9 +406,9 @@ describe("OpenAPIToMCPConverter", () => {
 
     it("converts operations with array responses", () => {
       const converter = new OpenAPIToMCPConverter(complexSpec);
-      const { tools } = converter.convertToMCPTools();
+      const { methods } = converter.convertToMCPTools();
 
-      const listPetsMethod = tools.API.methods.find((m) => m.name === "listPets");
+      const listPetsMethod = methods.API.find((m) => m.name === "listPets");
       expect(listPetsMethod).toBeDefined();
 
       const returnType = getReturnType(listPetsMethod!);
@@ -427,9 +421,9 @@ describe("OpenAPIToMCPConverter", () => {
 
     it("converts operations with request bodies using $ref", () => {
       const converter = new OpenAPIToMCPConverter(complexSpec);
-      const { tools } = converter.convertToMCPTools();
+      const { methods } = converter.convertToMCPTools();
 
-      const createPetMethod = tools.API.methods.find((m) => m.name === "createPet");
+      const createPetMethod = methods.API.find((m) => m.name === "createPet");
       expect(createPetMethod).toBeDefined();
 
       const params = getParamsFromSchema(createPetMethod!);
@@ -447,9 +441,9 @@ describe("OpenAPIToMCPConverter", () => {
 
     it("converts operations with referenced error responses", () => {
       const converter = new OpenAPIToMCPConverter(complexSpec);
-      const { tools } = converter.convertToMCPTools();
+      const { methods } = converter.convertToMCPTools();
 
-      const getPetMethod = tools.API.methods.find((m) => m.name === "getPet");
+      const getPetMethod = methods.API.find((m) => m.name === "getPet");
       expect(getPetMethod).toBeDefined();
 
       // We just check that the description includes the error references now.
@@ -458,9 +452,9 @@ describe("OpenAPIToMCPConverter", () => {
 
     it("handles recursive schema references without expanding them", () => {
       const converter = new OpenAPIToMCPConverter(complexSpec);
-      const { tools } = converter.convertToMCPTools();
+      const { methods } = converter.convertToMCPTools();
 
-      const createPetMethod = tools.API.methods.find((m) => m.name === "createPet");
+      const createPetMethod = methods.API.find((m) => m.name === "createPet");
       expect(createPetMethod).toBeDefined();
 
       const params = getParamsFromSchema(createPetMethod!);
@@ -470,14 +464,14 @@ describe("OpenAPIToMCPConverter", () => {
 
     it("converts all operations correctly respecting $ref usage", () => {
       const converter = new OpenAPIToMCPConverter(complexSpec);
-      const { tools } = converter.convertToMCPTools();
+      const { methods } = converter.convertToMCPTools();
 
-      expect(tools.API.methods).toHaveLength(4);
+      expect(methods.API).toHaveLength(4);
 
-      const methodNames = tools.API.methods.map((m) => m.name);
+      const methodNames = methods.API.map((m) => m.name);
       expect(methodNames).toEqual(expect.arrayContaining(["listPets", "createPet", "getPet", "updatePet"]));
 
-      tools.API.methods.forEach((method) => {
+      methods.API.forEach((method) => {
         expect(method).toHaveProperty("name");
         expect(method).toHaveProperty("description");
         expect(method).toHaveProperty("inputSchema");
@@ -697,9 +691,9 @@ describe("OpenAPIToMCPConverter", () => {
 
     it("handles deeply nested object references", () => {
       const converter = new OpenAPIToMCPConverter(nestedSpec);
-      const { tools } = converter.convertToMCPTools();
+      const { methods } = converter.convertToMCPTools();
 
-      const getOrgMethod = tools.API.methods.find((m) => m.name === "getOrganization");
+      const getOrgMethod = methods.API.find((m) => m.name === "getOrganization");
       expect(getOrgMethod).toBeDefined();
 
       const params = getParamsFromSchema(getOrgMethod!);
@@ -729,9 +723,9 @@ describe("OpenAPIToMCPConverter", () => {
 
     it("handles recursive array references without requiring expansion", () => {
       const converter = new OpenAPIToMCPConverter(nestedSpec);
-      const { tools } = converter.convertToMCPTools();
+      const { methods } = converter.convertToMCPTools();
 
-      const updateDeptMethod = tools.API.methods.find((m) => m.name === "updateDepartment");
+      const updateDeptMethod = methods.API.find((m) => m.name === "updateDepartment");
       expect(updateDeptMethod).toBeDefined();
 
       const params = getParamsFromSchema(updateDeptMethod!);
@@ -746,9 +740,9 @@ describe("OpenAPIToMCPConverter", () => {
 
     it("handles complex nested object hierarchies without expansion", () => {
       const converter = new OpenAPIToMCPConverter(nestedSpec);
-      const { tools } = converter.convertToMCPTools();
+      const { methods } = converter.convertToMCPTools();
 
-      const getDeptMethod = tools.API.methods.find((m) => m.name === "getDepartment");
+      const getDeptMethod = methods.API.find((m) => m.name === "getDepartment");
       expect(getDeptMethod).toBeDefined();
 
       const params = getParamsFromSchema(getDeptMethod!);
@@ -781,9 +775,9 @@ describe("OpenAPIToMCPConverter", () => {
 
     it("handles schema with mixed primitive and reference types without expansion", () => {
       const converter = new OpenAPIToMCPConverter(nestedSpec);
-      const { tools } = converter.convertToMCPTools();
+      const { methods } = converter.convertToMCPTools();
 
-      const updateDeptMethod = tools.API.methods.find((m) => m.name === "updateDepartment");
+      const updateDeptMethod = methods.API.find((m) => m.name === "updateDepartment");
       expect(updateDeptMethod).toBeDefined();
 
       const params = getParamsFromSchema(updateDeptMethod!);
@@ -798,14 +792,14 @@ describe("OpenAPIToMCPConverter", () => {
 
     it("converts all operations with complex schemas correctly respecting $ref", () => {
       const converter = new OpenAPIToMCPConverter(nestedSpec);
-      const { tools } = converter.convertToMCPTools();
+      const { methods } = converter.convertToMCPTools();
 
-      expect(tools.API.methods).toHaveLength(3);
+      expect(methods.API).toHaveLength(3);
 
-      const methodNames = tools.API.methods.map((m) => m.name);
+      const methodNames = methods.API.map((m) => m.name);
       expect(methodNames).toEqual(expect.arrayContaining(["getOrganization", "getDepartment", "updateDepartment"]));
 
-      tools.API.methods.forEach((method) => {
+      methods.API.forEach((method) => {
         expect(method).toHaveProperty("name");
         expect(method).toHaveProperty("description");
         expect(method).toHaveProperty("inputSchema");
@@ -939,13 +933,13 @@ describe("OpenAPIToMCPConverter", () => {
 
     it("should include delete operations in MCP tools", () => {
       const converter = new OpenAPIToMCPConverter(deleteSpec);
-      const { tools, openApiLookup } = converter.convertToMCPTools();
+      const { methods, openApiLookup } = converter.convertToMCPTools();
 
-      expect(tools).toHaveProperty("API");
-      expect(tools.API.methods).toHaveLength(2);
+      expect(methods).toHaveProperty("API");
+      expect(methods.API).toHaveLength(2);
 
-      const deleteObjectMethod = tools.API.methods.find((m) => m.name === "delete-object");
-      const removeListObjectMethod = tools.API.methods.find((m) => m.name === "remove-list-object");
+      const deleteObjectMethod = methods.API.find((m) => m.name === "delete-object");
+      const removeListObjectMethod = methods.API.find((m) => m.name === "remove-list-object");
 
       expect(deleteObjectMethod).toBeDefined();
       expect(removeListObjectMethod).toBeDefined();
@@ -985,9 +979,9 @@ describe("OpenAPIToMCPConverter", () => {
 
     it("should handle delete operations with proper error responses", () => {
       const converter = new OpenAPIToMCPConverter(deleteSpec);
-      const { tools } = converter.convertToMCPTools();
+      const { methods } = converter.convertToMCPTools();
 
-      const deleteObjectMethod = tools.API.methods.find((m) => m.name === "delete-object");
+      const deleteObjectMethod = methods.API.find((m) => m.name === "delete-object");
       expect(deleteObjectMethod?.description).toContain("Delete an object");
     });
   });
@@ -1586,10 +1580,10 @@ describe("OpenAPIToMCPConverter - Additional Complex Tests", () => {
 
   it.each(cases)("$name", ({ input, expected }) => {
     const converter = new OpenAPIToMCPConverter(input);
-    const { tools, openApiLookup } = converter.convertToMCPTools();
+    const { methods, openApiLookup } = converter.convertToMCPTools();
 
     // Use the custom verification instead of direct equality
-    verifyTools(tools, expected.tools);
+    verifyTools(methods, expected.tools);
     expect(openApiLookup).toEqual(expected.openApiLookup);
   });
 });
