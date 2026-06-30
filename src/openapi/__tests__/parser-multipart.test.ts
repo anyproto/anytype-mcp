@@ -53,12 +53,14 @@ describe("OpenAPI Multipart Form Parser", () => {
     };
 
     const converter = new OpenAPIToMCPConverter(spec);
-    const { tools } = converter.convertToMCPTools();
-    expect(Object.keys(tools)).toHaveLength(1);
+    const { methods } = converter.convertToMCPTools();
 
-    const [tool] = Object.values(tools);
-    expect(tool.methods).toHaveLength(1);
-    const [method] = tool.methods;
+    const keys = Object.keys(methods);
+    expect(keys).toEqual(["API"]);
+
+    const [tool] = Object.values(methods);
+    expect(methods.API).toHaveLength(1);
+    const [method] = tool;
     expect(method.name).toBe("uploadPetPhoto");
     expect(method.description).toContain("Upload a photo for a pet");
 
@@ -139,12 +141,12 @@ describe("OpenAPI Multipart Form Parser", () => {
     };
 
     const converter = new OpenAPIToMCPConverter(spec);
-    const { tools } = converter.convertToMCPTools();
-    expect(Object.keys(tools)).toHaveLength(1);
+    const { methods } = converter.convertToMCPTools();
+    expect(Object.keys(methods)).toHaveLength(1);
 
-    const [tool] = Object.values(tools);
-    expect(tool.methods).toHaveLength(1);
-    const [method] = tool.methods;
+    const [tool] = Object.values(methods);
+    expect(tool).toHaveLength(1);
+    const [method] = tool;
     expect(method.name).toBe("uploadPetDocuments");
     expect(method.description).toContain("Upload multiple documents");
 
@@ -248,12 +250,12 @@ describe("OpenAPI Multipart Form Parser", () => {
     };
 
     const converter = new OpenAPIToMCPConverter(spec);
-    const { tools } = converter.convertToMCPTools();
-    expect(Object.keys(tools)).toHaveLength(1);
+    const { methods } = converter.convertToMCPTools();
+    expect(Object.keys(methods)).toHaveLength(1);
 
-    const [tool] = Object.values(tools);
-    expect(tool.methods).toHaveLength(1);
-    const [method] = tool.methods;
+    const [tool] = Object.values(methods);
+    expect(tool).toHaveLength(1);
+    const [method] = tool;
     expect(method.name).toBe("updatePetProfile");
     expect(method.description).toContain("Update pet profile");
 
@@ -367,9 +369,9 @@ describe("OpenAPI Multipart Form Parser", () => {
     };
 
     const converter = new OpenAPIToMCPConverter(spec);
-    const { tools } = converter.convertToMCPTools();
-    const [tool] = Object.values(tools);
-    const [method] = tool.methods;
+    const { methods } = converter.convertToMCPTools();
+    const [tool] = Object.values(methods);
+    const [method] = tool;
 
     expect(method.name).toBe("updatePetMetadata");
     expect(method.inputSchema.required).toContain("id");
@@ -475,9 +477,9 @@ describe("OpenAPI Multipart Form Parser", () => {
     };
 
     const converter = new OpenAPIToMCPConverter(spec);
-    const { tools } = converter.convertToMCPTools();
-    const [tool] = Object.values(tools);
-    const [method] = tool.methods;
+    const { methods } = converter.convertToMCPTools();
+    const [tool] = Object.values(methods);
+    const [method] = tool;
 
     expect(method.name).toBe("addMedicalRecord");
     expect(method.inputSchema.required).toContain("id");
@@ -571,9 +573,9 @@ describe("OpenAPI Multipart Form Parser", () => {
     };
 
     const converter = new OpenAPIToMCPConverter(spec);
-    const { tools } = converter.convertToMCPTools();
-    const [tool] = Object.values(tools);
-    const [method] = tool.methods;
+    const { methods } = converter.convertToMCPTools();
+    const [tool] = Object.values(methods);
+    const [method] = tool;
 
     expect(method.name).toBe("addPetContent");
     expect(method.inputSchema.required).toContain("id");
