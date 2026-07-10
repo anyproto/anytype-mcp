@@ -1,4 +1,5 @@
 import type { Tool } from "@anthropic-ai/sdk/resources/messages/messages";
+import type { Tool as MCPTool } from "@modelcontextprotocol/sdk/types.js";
 import type { JSONSchema7 as IJsonSchema } from "json-schema";
 import type { ChatCompletionTool } from "openai/resources/chat/completions";
 import type { OpenAPIV3, OpenAPIV3_1 } from "openapi-types";
@@ -8,6 +9,7 @@ type NewToolMethod = {
   description: string;
   inputSchema: IJsonSchema & { type: "object" };
   outputSchema?: IJsonSchema;
+  annotations: NonNullable<MCPTool["annotations"]>;
 };
 
 type FunctionParameters = {
@@ -654,6 +656,7 @@ export class OpenAPIToMCPConverter {
         name: methodName,
         description,
         inputSchema,
+        annotations: this.getToolAnnotations(method),
         ...(outputSchema ? { outputSchema } : {}),
       };
     } catch (error) {
@@ -663,8 +666,27 @@ export class OpenAPIToMCPConverter {
         name: methodName,
         description,
         inputSchema,
+        annotations: this.getToolAnnotations(method),
         ...(outputSchema ? { outputSchema } : {}),
       };
+    }
+  }
+
+  private getToolAnnotations(method: string): NewToolMethod["annotations"] {
+    // This proxy only operates on the configured Anytype API, so its domain is
+    // closed. For mutations, HTTP verbs are safer signals than operation names:
+    // arbitrary POST/PATCH/PUT endpoints may replace or remove existing state.
+    switch (method.toLowerCase()) {
+      case "get":
+        return { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
+      case "delete":
+        return { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false };
+      case "put":
+        return { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false };
+      case "post":
+      case "patch":
+      default:
+        return { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false };
     }
   }
 
