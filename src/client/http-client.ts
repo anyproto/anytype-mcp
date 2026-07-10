@@ -2,6 +2,7 @@ import type { AxiosInstance } from "axios";
 import FormData from "form-data";
 import fs from "fs";
 import { Headers } from "node-fetch";
+import { Buffer } from "node:buffer";
 import OpenAPIClientAxios from "openapi-client-axios";
 import type { OpenAPIV3, OpenAPIV3_1 } from "openapi-types";
 import { isFileUploadParameter } from "../openapi/file-upload";
@@ -32,8 +33,10 @@ export class HttpClientError extends Error {
 export class HttpClient {
   private api: Promise<AxiosInstance>;
   private client: OpenAPIClientAxios;
+  private openApiSpec: OpenAPIV3.Document | OpenAPIV3_1.Document;
 
   constructor(config: HttpClientConfig, openApiSpec: OpenAPIV3.Document | OpenAPIV3_1.Document) {
+    this.openApiSpec = openApiSpec;
     // @ts-expect-error OpenAPIClientAxios can be imported as default or named export, we handle both cases
     this.client = new (OpenAPIClientAxios.default ?? OpenAPIClientAxios)({
       definition: openApiSpec,
@@ -105,6 +108,72 @@ export class HttpClient {
   }
 
   /**
+   * Whether an operation declares a binary success response. Axios otherwise
+   * decodes response bodies as text, which can corrupt downloaded file bytes.
+   */
+  private hasBinaryResponse(operation: OpenAPIV3.OperationObject): boolean {
+    const successStatuses = ["200", "201", "202", "203", "204", "206"];
+
+    return successStatuses.some((status) => {
+      const response = operation.responses?.[status];
+      if (!response) return false;
+      const responseObject =
+        "$ref" in response ? this.resolveLocalRef<OpenAPIV3.ResponseObject>(response.$ref) : response;
+      if (!responseObject) return false;
+
+      return Object.entries(responseObject.content ?? {}).some(([mediaType, media]) => {
+        const schema = media.schema;
+        const schemaObject =
+          schema && "$ref" in schema ? this.resolveLocalRef<OpenAPIV3.SchemaObject>(schema.$ref) : schema;
+        const hasBinarySchema = schemaObject && !("$ref" in schemaObject) && schemaObject.format === "binary";
+
+        return mediaType === "application/octet-stream" || mediaType.startsWith("image/") || hasBinarySchema;
+      });
+    });
+  }
+
+  private resolveLocalRef<T>(ref: string): T | null {
+    if (!ref.startsWith("#/")) return null;
+
+    let current: unknown = this.openApiSpec;
+    for (const rawPart of ref.slice(2).split("/")) {
+      const part = rawPart.replaceAll("~1", "/").replaceAll("~0", "~");
+      if (!current || typeof current !== "object" || !(part in current)) return null;
+      current = (current as Record<string, unknown>)[part];
+    }
+    return current as T;
+  }
+
+  /**
+   * Axios returns every response as bytes when responseType is arraybuffer,
+   * including JSON and text errors from binary download operations.
+   */
+  private decodeTextData(data: unknown, headers: Headers): unknown {
+    let bytes: Buffer | null = null;
+    if (Buffer.isBuffer(data)) {
+      bytes = data;
+    } else if (data instanceof ArrayBuffer) {
+      bytes = Buffer.from(data);
+    } else if (ArrayBuffer.isView(data)) {
+      bytes = Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+    }
+    if (!bytes) return data;
+
+    const contentType = headers.get("content-type")?.toLowerCase() ?? "";
+    if (!contentType.includes("json") && !contentType.startsWith("text/")) return data;
+
+    const text = bytes.toString("utf8");
+    if (contentType.includes("json")) {
+      try {
+        return JSON.parse(text);
+      } catch {
+        return text;
+      }
+    }
+    return text;
+  }
+
+  /**
    * Execute an OpenAPI operation
    */
   async executeOperation<T = any>(
@@ -165,6 +234,7 @@ export class HttpClient {
         headers: {
           ...headers,
         },
+        ...(this.hasBinaryResponse(operation) ? { responseType: "arraybuffer" as const } : {}),
       };
 
       // first argument is url parameters, second is body parameters
@@ -179,7 +249,7 @@ export class HttpClient {
       });
 
       return {
-        data: response.data,
+        data: this.decodeTextData(response.data, responseHeaders) as T,
         status: response.status,
         headers: responseHeaders,
       };
@@ -190,13 +260,9 @@ export class HttpClient {
         Object.entries(error.response.headers).forEach(([key, value]) => {
           if (value) headers.append(key, value.toString());
         });
+        const data = this.decodeTextData(error.response.data, headers);
 
-        throw new HttpClientError(
-          error.response.statusText || "Request failed",
-          error.response.status,
-          error.response.data,
-          headers,
-        );
+        throw new HttpClientError(error.response.statusText || "Request failed", error.response.status, data, headers);
       }
       throw error;
     }

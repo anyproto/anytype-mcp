@@ -1,4 +1,5 @@
 import { Headers } from "node-fetch";
+import { Buffer } from "node:buffer";
 import OpenAPIClientAxios from "openapi-client-axios";
 import { OpenAPIV3 } from "openapi-types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -7,6 +8,7 @@ import { HttpClient } from "../http-client";
 // Mock the OpenAPIClientAxios initialization
 const mockApi = {
   getPet: vi.fn(),
+  downloadFile: vi.fn(),
   testOperation: vi.fn(),
   complexOperation: vi.fn(),
 };
@@ -93,6 +95,162 @@ describe("HttpClient", () => {
     expect(response.status).toBe(200);
     expect(response.headers).toBeInstanceOf(Headers);
     expect(response.headers.get("content-type")).toBe("application/json");
+  });
+
+  it("requests binary responses as arraybuffers", async () => {
+    const operation: OpenAPIV3.OperationObject & { method: string; path: string } = {
+      method: "get",
+      path: "/files/{fileId}",
+      operationId: "downloadFile",
+      parameters: [{ name: "fileId", in: "path", required: true, schema: { type: "string" } }],
+      responses: {
+        "200": {
+          description: "File contents",
+          content: {
+            "application/octet-stream": {
+              schema: { type: "string", format: "binary" },
+            },
+          },
+        },
+      },
+    };
+    const fileBytes = Buffer.from("file contents");
+    mockApi.downloadFile.mockResolvedValueOnce({
+      data: fileBytes,
+      status: 200,
+      headers: { "content-type": "application/pdf" },
+    });
+
+    const response = await client.executeOperation(operation, { fileId: "file-1" });
+
+    expect(mockApi.downloadFile).toHaveBeenCalledWith({ fileId: "file-1" }, undefined, {
+      headers: { "Content-Type": null },
+      responseType: "arraybuffer",
+    });
+    expect(response.data).toBe(fileBytes);
+    expect(response.headers.get("content-type")).toBe("application/pdf");
+  });
+
+  it("detects binary responses through local response and schema references", async () => {
+    const spec: OpenAPIV3.Document = {
+      openapi: "3.0.0",
+      info: { title: "Test API", version: "1.0.0" },
+      paths: {
+        "/files/{fileId}": {
+          get: {
+            operationId: "downloadFile",
+            responses: { "200": { $ref: "#/components/responses/FileResponse" } },
+          },
+        },
+      },
+      components: {
+        responses: {
+          FileResponse: {
+            description: "File contents",
+            content: { "application/pdf": { schema: { $ref: "#/components/schemas/BinaryFile" } } },
+          },
+        },
+        schemas: { BinaryFile: { type: "string", format: "binary" } },
+      },
+    };
+    const operation = spec.paths["/files/{fileId}"]?.get as OpenAPIV3.OperationObject & {
+      method: string;
+      path: string;
+    };
+    const referencedClient = new HttpClient({ baseUrl: "https://api.example.com" }, spec);
+    mockApi.downloadFile.mockResolvedValueOnce({ data: Buffer.from("pdf"), status: 200, headers: {} });
+
+    await referencedClient.executeOperation(operation, { fileId: "file-1" });
+
+    expect(mockApi.downloadFile).toHaveBeenCalledWith(
+      { fileId: "file-1" },
+      undefined,
+      expect.objectContaining({ responseType: "arraybuffer" }),
+    );
+  });
+
+  it("decodes successful JSON variants from binary operations", async () => {
+    const operation: OpenAPIV3.OperationObject & { method: string; path: string } = {
+      method: "get",
+      path: "/files/{fileId}",
+      operationId: "downloadFile",
+      responses: {
+        "200": {
+          description: "File or metadata",
+          content: {
+            "application/octet-stream": { schema: { type: "string", format: "binary" } },
+            "application/json": { schema: { type: "object" } },
+          },
+        },
+      },
+    };
+    const metadata = { status: "processing" };
+    mockApi.downloadFile.mockResolvedValueOnce({
+      data: Buffer.from(JSON.stringify(metadata)),
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+
+    const response = await client.executeOperation(operation, { fileId: "file-1" });
+
+    expect(response.data).toEqual(metadata);
+  });
+
+  it("decodes structured JSON errors from binary operations", async () => {
+    const operation: OpenAPIV3.OperationObject & { method: string; path: string } = {
+      method: "get",
+      path: "/files/{fileId}",
+      operationId: "downloadFile",
+      responses: {
+        "200": {
+          description: "File contents",
+          content: { "application/octet-stream": { schema: { type: "string", format: "binary" } } },
+        },
+        "404": { description: "File not found" },
+      },
+    };
+    const errorData = { code: "NOT_FOUND", message: "File not found" };
+    mockApi.downloadFile.mockRejectedValueOnce({
+      response: {
+        data: Buffer.from(JSON.stringify(errorData)),
+        status: 404,
+        statusText: "Not Found",
+        headers: { "content-type": "application/json; charset=utf-8" },
+      },
+    });
+
+    await expect(client.executeOperation(operation, { fileId: "missing" })).rejects.toMatchObject({
+      status: 404,
+      data: errorData,
+    });
+  });
+
+  it("decodes text errors from ArrayBuffer responses", async () => {
+    const operation: OpenAPIV3.OperationObject & { method: string; path: string } = {
+      method: "get",
+      path: "/files/{fileId}",
+      operationId: "downloadFile",
+      responses: {
+        "200": {
+          description: "File contents",
+          content: { "application/octet-stream": { schema: { type: "string", format: "binary" } } },
+        },
+      },
+    };
+    const errorBytes = Uint8Array.from(Buffer.from("download unavailable"));
+    mockApi.downloadFile.mockRejectedValueOnce({
+      response: {
+        data: errorBytes.buffer,
+        status: 503,
+        statusText: "Service Unavailable",
+        headers: { "content-type": "text/plain; charset=utf-8" },
+      },
+    });
+
+    await expect(client.executeOperation(operation, { fileId: "file-1" })).rejects.toMatchObject({
+      status: 503,
+      data: "download unavailable",
+    });
   });
 
   it("throws error when operation ID is missing", async () => {

@@ -1,8 +1,9 @@
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { Headers } from "node-fetch";
+import { Buffer } from "node:buffer";
 import { OpenAPIV3 } from "openapi-types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { HttpClient } from "../../client/http-client";
+import { HttpClient, HttpClientError } from "../../client/http-client";
 import { MCPProxy } from "../proxy";
 
 // Mock the dependencies
@@ -93,6 +94,100 @@ describe("MCPProxy", () => {
 
       expect(result).toEqual({
         content: [{ type: "text", text: JSON.stringify({ message: "success" }) }],
+      });
+    });
+
+    it("should return binary images as base64 MCP image content", async () => {
+      const imageBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+      (HttpClient.prototype.executeOperation as ReturnType<typeof vi.fn>).mockResolvedValue({
+        data: imageBytes,
+        status: 200,
+        headers: new Headers({ "content-type": "image/png; charset=binary" }),
+      });
+      (proxy as any).openApiLookup = {
+        "API-download-file": {
+          operationId: "download_file",
+          responses: { "200": { description: "File contents" } },
+          method: "get",
+          path: "/v1/spaces/{space_id}/files/{file_id}",
+        },
+      };
+
+      const [, callToolHandler] = getHandlers(proxy);
+      const result = await callToolHandler({
+        params: {
+          name: "API-download-file",
+          arguments: { space_id: "space-1", file_id: "image-1", width: 800 },
+        },
+      });
+
+      expect(result).toEqual({
+        content: [{ type: "image", data: imageBytes.toString("base64"), mimeType: "image/png" }],
+      });
+    });
+
+    it("should return other binary data as a base64 embedded resource", async () => {
+      const pdfBytes = Buffer.from("%PDF-1.7\n");
+      (HttpClient.prototype.executeOperation as ReturnType<typeof vi.fn>).mockResolvedValue({
+        data: pdfBytes,
+        status: 200,
+        headers: new Headers({ "content-type": "application/pdf" }),
+      });
+      (proxy as any).openApiLookup = {
+        "API-download-file": {
+          operationId: "download_file",
+          responses: { "200": { description: "File contents" } },
+          method: "get",
+          path: "/v1/spaces/{space_id}/files/{file_id}",
+        },
+      };
+
+      const [, callToolHandler] = getHandlers(proxy);
+      const result = await callToolHandler({
+        params: {
+          name: "API-download-file",
+          arguments: { space_id: "space-1", file_id: "document-1" },
+        },
+      });
+
+      expect(result).toEqual({
+        content: [
+          {
+            type: "resource",
+            resource: {
+              uri: "anytype://api/download_file?space_id=space-1&file_id=document-1",
+              blob: pdfBytes.toString("base64"),
+              mimeType: "application/pdf",
+            },
+          },
+        ],
+      });
+    });
+
+    it("should preserve structured JSON errors from binary operations", async () => {
+      const errorData = { code: "NOT_FOUND", message: "File not found" };
+      const error = Object.assign(new HttpClientError("Not Found", 404, errorData), {
+        status: 404,
+        data: errorData,
+        headers: new Headers({ "content-type": "application/json" }),
+      });
+      (HttpClient.prototype.executeOperation as ReturnType<typeof vi.fn>).mockRejectedValue(error);
+      (proxy as any).openApiLookup = {
+        "API-download-file": {
+          operationId: "download_file",
+          responses: { "200": { description: "File contents" } },
+          method: "get",
+          path: "/v1/spaces/{space_id}/files/{file_id}",
+        },
+      };
+
+      const [, callToolHandler] = getHandlers(proxy);
+      const result = await callToolHandler({
+        params: { name: "API-download-file", arguments: { space_id: "space-1", file_id: "missing" } },
+      });
+
+      expect(result).toEqual({
+        content: [{ type: "text", text: JSON.stringify({ status: "error", ...errorData }) }],
       });
     });
 
