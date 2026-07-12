@@ -128,6 +128,11 @@ export class OpenAPIToMCPConverter {
                     items: { type: "string" },
                     description: "Array of object IDs for relation property filters",
                   },
+                  files: {
+                    type: "array",
+                    items: { type: "string" },
+                    description: "Array of file IDs for file property filters",
+                  },
                   url: {
                     type: "string",
                     description: "URL value for URL property filters",
