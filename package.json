@@ -51,7 +51,7 @@
     "prettier": "3.9.6",
     "prettier-plugin-organize-imports": "4.3.0",
     "tsx": "4.23.1",
-    "typescript": "6.0.2",
+    "typescript": "7.0.2",
     "vitest": "4.1.10"
   },
   "description": "Official MCP server for Anytype API",
