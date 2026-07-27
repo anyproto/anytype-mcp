@@ -4,24 +4,26 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Common Commands
 
+This project uses [Bun](https://bun.com) as its package manager and script runner (lockfile: `bun.lock`). The published artifact still targets Node.js.
+
 ### Development
-- `npm install -D` - Install all dependencies including devDependencies
-- `npm run dev` - Start the development server with file watching (uses tsx watch)
-- `npm run build` - Build the TypeScript project and generate CLI binary (bin/cli.mjs)
+- `bun install` - Install all dependencies including devDependencies
+- `bun run dev` - Start the development server with file watching (uses tsx watch)
+- `bun run build` - Build the TypeScript project and generate CLI binary (bin/cli.mjs)
 
 ### Testing
-- `npm test` - Run all tests once with Vitest
-- `npm run test:dev` - Run tests in watch mode
-- Run a specific test file: `npx vitest run src/openapi/__tests__/parser.test.ts`
+- `bun run test` - Run all tests once with Vitest
+- `bun run test:dev` - Run tests in watch mode
+- Run a specific test file: `bunx vitest run src/openapi/__tests__/parser.test.ts`
 
 ### Code Quality
-- `npm run lint` - Check code formatting with ESLint
-- `npm run lint:fix` - Auto-fix formatting issues with ESLint
-- `npm run format` - Auto-fix formatting issues with Prettier
-- `npm run typecheck` - Run TypeScript type checking without emitting files
+- `bun run lint` - Check code formatting with ESLint
+- `bun run lint:fix` - Auto-fix formatting issues with ESLint
+- `bun run format` - Auto-fix formatting issues with Prettier
+- `bun run typecheck` - Run TypeScript type checking without emitting files
 
 ### Utility Scripts
-- `npm run parse-openapi` - Parse OpenAPI specification
+- `bun run parse-openapi` - Parse OpenAPI specification
 
 ## Architecture Overview
 

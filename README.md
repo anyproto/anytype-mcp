@@ -148,22 +148,22 @@ git clone https://github.com/anyproto/anytype-mcp.git
 cd anytype-mcp
 ```
 
-2. Install dependencies:
+2. Install dependencies (requires [Bun](https://bun.com)):
 
 ```bash
-npm install -D
+bun install
 ```
 
 3. Build the project:
 
 ```bash
-npm run build
+bun run build
 ```
 
 4. Link the package globally (optional):
 
 ```bash
-npm link
+bun link
 ```
 
 ## Contribution

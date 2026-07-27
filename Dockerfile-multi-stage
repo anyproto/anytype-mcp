@@ -1,20 +1,25 @@
 # syntax=docker/dockerfile:1
-FROM node:24-alpine AS build
+FROM oven/bun:1-alpine AS build
 WORKDIR /app
 
-COPY package*.json ./
-RUN npm ci
+COPY package.json bun.lock ./
+RUN bun install --frozen-lockfile
 
 COPY . .
-RUN npm run build
+RUN bun run build
+
+FROM oven/bun:1-alpine AS deps
+WORKDIR /app
+
+COPY package.json bun.lock ./
+RUN bun install --frozen-lockfile --production
 
 FROM node:24-alpine AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 
-COPY package*.json ./
-RUN npm ci --omit=dev
-
+COPY package.json ./
+COPY --from=deps /app/node_modules ./node_modules
 COPY --from=build /app/bin ./bin
 COPY --from=build /app/build ./build
 
