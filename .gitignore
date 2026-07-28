@@ -159,6 +159,10 @@ bin
 
 .vscode-test
 
+# VSCode local settings
+
+.vscode
+
 # yarn v2
 
 .yarn/cache

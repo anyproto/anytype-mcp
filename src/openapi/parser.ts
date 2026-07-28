@@ -1,13 +1,17 @@
-import type { Tool } from "@anthropic-ai/sdk/resources/messages/messages";
+import type { Tool as AnthropicTool } from "@anthropic-ai/sdk/resources/messages/messages";
+import type { Tool as McpTool } from "@modelcontextprotocol/sdk/types.js";
 import type { JSONSchema7 as IJsonSchema } from "json-schema";
 import type { ChatCompletionTool } from "openai/resources/chat/completions";
 import type { OpenAPIV3, OpenAPIV3_1 } from "openapi-types";
 
-type NewToolMethod = {
+type McpToolAnnotations = McpTool["annotations"];
+
+export type ToolMethod = {
   name: string;
   description: string;
   inputSchema: IJsonSchema & { type: "object" };
   outputSchema?: IJsonSchema;
+  annotations?: McpToolAnnotations;
 };
 
 type FunctionParameters = {
@@ -21,7 +25,10 @@ export class OpenAPIToMCPConverter {
   private schemaCache: Record<string, IJsonSchema> = {};
   private nameCounter: number = 0;
 
-  constructor(private openApiSpec: OpenAPIV3.Document | OpenAPIV3_1.Document) {}
+  constructor(
+    private openApiSpec: OpenAPIV3.Document | OpenAPIV3_1.Document,
+    private options: { skipToolNamePrefix?: boolean; stripErrResponseDescriptions?: boolean } = {},
+  ) {}
 
   /**
    * Resolve a $ref reference to its schema in the openApiSpec.
@@ -313,19 +320,19 @@ export class OpenAPIToMCPConverter {
   }
 
   convertToMCPTools(): {
-    tools: Record<string, { methods: NewToolMethod[] }>;
+    methods: Record<string, ToolMethod[]>;
     openApiLookup: Record<string, OpenAPIV3.OperationObject & { method: string; path: string }>;
-    zip: Record<string, { openApi: OpenAPIV3.OperationObject & { method: string; path: string }; mcp: NewToolMethod }>;
+    zip: Record<string, { openApi: OpenAPIV3.OperationObject & { method: string; path: string }; mcp: ToolMethod }>;
   } {
     const apiName = "API";
 
     const openApiLookup: Record<string, OpenAPIV3.OperationObject & { method: string; path: string }> = {};
-    const tools: Record<string, { methods: NewToolMethod[] }> = {
-      [apiName]: { methods: [] },
+    const methods: Record<string, ToolMethod[]> = {
+      [apiName]: [],
     };
     const zip: Record<
       string,
-      { openApi: OpenAPIV3.OperationObject & { method: string; path: string }; mcp: NewToolMethod }
+      { openApi: OpenAPIV3.OperationObject & { method: string; path: string }; mcp: ToolMethod }
     > = {};
     for (const [path, pathItem] of Object.entries(this.openApiSpec.paths || {})) {
       if (!pathItem) continue;
@@ -339,14 +346,15 @@ export class OpenAPIToMCPConverter {
           // convert name to kebab-case to conform mcp tool naming convention
           const uniqueName = this.ensureUniqueName(mcpMethod.name).replaceAll("_", "-");
           mcpMethod.name = uniqueName;
-          tools[apiName]!.methods.push(mcpMethod);
-          openApiLookup[apiName + "-" + uniqueName] = { ...operation, method, path };
-          zip[apiName + "-" + uniqueName] = { openApi: { ...operation, method, path }, mcp: mcpMethod };
+          methods[apiName]!.push(mcpMethod);
+          const toolName = this.options.skipToolNamePrefix ? uniqueName : `${apiName}-${uniqueName}`;
+          openApiLookup[toolName] = { ...operation, method, path };
+          zip[toolName] = { openApi: { ...operation, method, path }, mcp: mcpMethod };
         }
       }
     }
 
-    return { tools, openApiLookup, zip };
+    return { methods, openApiLookup, zip };
   }
 
   /**
@@ -381,8 +389,8 @@ export class OpenAPIToMCPConverter {
   /**
    * Convert the OpenAPI spec to Anthropic's Tool format
    */
-  convertToAnthropicTools(): Tool[] {
-    const tools: Tool[] = [];
+  convertToAnthropicTools(): AnthropicTool[] {
+    const tools: AnthropicTool[] = [];
 
     for (const [path, pathItem] of Object.entries(this.openApiSpec.paths || {})) {
       if (!pathItem) continue;
@@ -392,10 +400,10 @@ export class OpenAPIToMCPConverter {
         if (!this.isOperation(method, operation) || operation.tags?.includes("Auth")) continue;
 
         const parameters = this.convertOperationToJsonSchema(operation, method, path);
-        const tool: Tool = {
+        const tool: AnthropicTool = {
           name: operation.operationId!,
           description: operation.summary || operation.description || "",
-          input_schema: parameters as Tool["input_schema"],
+          input_schema: parameters as AnthropicTool["input_schema"],
         };
         tools.push(tool);
       }
@@ -537,7 +545,7 @@ export class OpenAPIToMCPConverter {
     operation: OpenAPIV3.OperationObject,
     method: string,
     path: string,
-  ): NewToolMethod | null {
+  ): ToolMethod | null {
     if (!operation.operationId) {
       console.warn(`Operation without operationId at ${method} ${path}`);
       return null;
@@ -626,7 +634,7 @@ export class OpenAPIToMCPConverter {
 
     // Build description including error responses
     let description = operation.summary || operation.description || "";
-    if (operation.responses) {
+    if (operation.responses && !this.options.stripErrResponseDescriptions) {
       const errorResponses = Object.entries(operation.responses)
         .filter(([code]) => code.startsWith("4") || code.startsWith("5"))
         .map(([code, response]) => {
@@ -643,6 +651,8 @@ export class OpenAPIToMCPConverter {
     // Extract return type (output schema)
     const outputSchema = this.extractResponseType(operation.responses);
 
+    const annotations = this.guessToolAnnotations(method, methodName);
+
     // Generate Zod schema from input schema
     try {
       // const zodSchemaStr = jsonSchemaToZod(inputSchema, { module: "cjs" })
@@ -654,6 +664,7 @@ export class OpenAPIToMCPConverter {
         name: methodName,
         description,
         inputSchema,
+        annotations,
         ...(outputSchema ? { outputSchema } : {}),
       };
     } catch (error) {
@@ -666,6 +677,16 @@ export class OpenAPIToMCPConverter {
         ...(outputSchema ? { outputSchema } : {}),
       };
     }
+  }
+
+  private guessToolAnnotations(method: string, methodName: string): McpToolAnnotations {
+    const [verb] = methodName.split("_");
+    return {
+      destructiveHint: method === "delete",
+      idempotentHint: method === "get" || method === "patch" || verb === "search",
+      readOnlyHint: method === "get" || verb === "search",
+      openWorldHint: true,
+    };
   }
 
   private extractResponseType(responses: OpenAPIV3.ResponsesObject | undefined): IJsonSchema | null {

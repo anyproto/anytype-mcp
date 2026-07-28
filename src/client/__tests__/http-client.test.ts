@@ -1,8 +1,16 @@
+import axios from "axios";
 import { Headers } from "node-fetch";
 import OpenAPIClientAxios from "openapi-client-axios";
 import { OpenAPIV3 } from "openapi-types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HttpClient } from "../http-client";
+
+function makeAxiosError(status: number, statusText: string, data: any, headers: Record<string, string> = {}) {
+  const err = new axios.AxiosError(statusText);
+  err.response = { status, statusText, data, headers, config: err.config! } as any;
+  err.isAxiosError = true;
+  return err;
+}
 
 // Mock the OpenAPIClientAxios initialization
 const mockApi = {
@@ -65,7 +73,7 @@ describe("HttpClient", () => {
 
   beforeEach(async () => {
     // Create a new instance of HttpClient
-    client = new HttpClient({ baseUrl: "https://api.example.com" }, sampleSpec);
+    client = new HttpClient({ baseUrl: "https://api.example.com", headers: {} }, sampleSpec);
     // Await the initialization to ensure mockApi is set correctly
     mockApi = await client["api"];
   });
@@ -125,20 +133,16 @@ describe("HttpClient", () => {
   });
 
   it("handles API errors correctly", async () => {
-    const error = {
-      response: {
-        status: 404,
-        statusText: "Not Found",
-        data: {
-          code: "RESOURCE_NOT_FOUND",
-          message: "Pet not found",
-          petId: 999,
-        },
-        headers: {
-          "content-type": "application/json",
-        },
+    const error = makeAxiosError(
+      404,
+      "Not Found",
+      {
+        code: "RESOURCE_NOT_FOUND",
+        message: "Pet not found",
+        petId: 999,
       },
-    };
+      { "content-type": "application/json" },
+    );
     mockApi.getPet.mockRejectedValueOnce(error);
 
     await expect(client.executeOperation(getPetOperation, { petId: 999 })).rejects.toMatchObject({
@@ -153,29 +157,19 @@ describe("HttpClient", () => {
   });
 
   it("handles validation errors (400) correctly", async () => {
-    const error = {
-      response: {
-        status: 400,
-        statusText: "Bad Request",
-        data: {
-          code: "VALIDATION_ERROR",
-          message: "Invalid input data",
-          errors: [
-            {
-              field: "age",
-              message: "Age must be a positive number",
-            },
-            {
-              field: "name",
-              message: "Name is required",
-            },
-          ],
-        },
-        headers: {
-          "content-type": "application/json",
-        },
+    const error = makeAxiosError(
+      400,
+      "Bad Request",
+      {
+        code: "VALIDATION_ERROR",
+        message: "Invalid input data",
+        errors: [
+          { field: "age", message: "Age must be a positive number" },
+          { field: "name", message: "Name is required" },
+        ],
       },
-    };
+      { "content-type": "application/json" },
+    );
     mockApi.getPet.mockRejectedValueOnce(error);
 
     await expect(client.executeOperation(getPetOperation, { petId: 1 })).rejects.toMatchObject({
@@ -199,16 +193,12 @@ describe("HttpClient", () => {
   });
 
   it("handles server errors (500) with HTML response", async () => {
-    const error = {
-      response: {
-        status: 500,
-        statusText: "Internal Server Error",
-        data: "<html><body><h1>500 Internal Server Error</h1></body></html>",
-        headers: {
-          "content-type": "text/html",
-        },
-      },
-    };
+    const error = makeAxiosError(
+      500,
+      "Internal Server Error",
+      "<html><body><h1>500 Internal Server Error</h1></body></html>",
+      { "content-type": "text/html" },
+    );
     mockApi.getPet.mockRejectedValueOnce(error);
 
     await expect(client.executeOperation(getPetOperation, { petId: 1 })).rejects.toMatchObject({
@@ -219,21 +209,16 @@ describe("HttpClient", () => {
   });
 
   it("handles rate limit errors (429)", async () => {
-    const error = {
-      response: {
-        status: 429,
-        statusText: "Too Many Requests",
-        data: {
-          code: "RATE_LIMIT_EXCEEDED",
-          message: "Rate limit exceeded",
-          retryAfter: 60,
-        },
-        headers: {
-          "content-type": "application/json",
-          "retry-after": "60",
-        },
+    const error = makeAxiosError(
+      429,
+      "Too Many Requests",
+      {
+        code: "RATE_LIMIT_EXCEEDED",
+        message: "Rate limit exceeded",
+        retryAfter: 60,
       },
-    };
+      { "content-type": "application/json", "retry-after": "60" },
+    );
     mockApi.getPet.mockRejectedValueOnce(error);
 
     await expect(client.executeOperation(getPetOperation, { petId: 1 })).rejects.toMatchObject({
@@ -296,7 +281,7 @@ describe("HttpClient", () => {
       throw new Error("Test setup error: post operation not found");
     }
 
-    const client = new HttpClient({ baseUrl: "http://test.com" }, testSpec);
+    const client = new HttpClient({ baseUrl: "http://test.com", headers: {} }, testSpec);
 
     await client.executeOperation(postOperation, { foo: "bar" });
 
@@ -378,7 +363,7 @@ describe("HttpClient", () => {
       throw new Error("Test setup error: complex operation not found");
     }
 
-    const client = new HttpClient({ baseUrl: "http://test.com" }, complexSpec);
+    const client = new HttpClient({ baseUrl: "http://test.com", headers: {} }, complexSpec);
 
     await client.executeOperation(complexOperation, {
       // Path parameter
@@ -449,6 +434,7 @@ describe("HttpClient", () => {
 
   const mockConfig = {
     baseUrl: "http://test-api.com",
+    headers: {},
   };
 
   beforeEach(() => {
@@ -456,20 +442,16 @@ describe("HttpClient", () => {
   });
 
   it("should properly propagate structured error responses", async () => {
-    const errorResponse = {
-      response: {
-        data: {
-          code: "VALIDATION_ERROR",
-          message: "Invalid input",
-          details: ["Field x is required"],
-        },
-        status: 400,
-        statusText: "Bad Request",
-        headers: {
-          "content-type": "application/json",
-        },
+    const errorResponse = makeAxiosError(
+      400,
+      "Bad Request",
+      {
+        code: "VALIDATION_ERROR",
+        message: "Invalid input",
+        details: ["Field x is required"],
       },
-    };
+      { "content-type": "application/json" },
+    );
 
     // Mock axios instance
     const mockAxiosInstance = {
