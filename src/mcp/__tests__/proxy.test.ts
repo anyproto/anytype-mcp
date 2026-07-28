@@ -2,7 +2,7 @@ import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { Headers } from "node-fetch";
 import { OpenAPIV3 } from "openapi-types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { HttpClient } from "../../client/http-client";
+import { HttpClient, HttpClientError } from "../../client/http-client";
 import { MCPProxy } from "../proxy";
 
 // Mock the dependencies
@@ -19,6 +19,9 @@ describe("MCPProxy", () => {
       .flatMap((x: unknown[]) => x)
       .filter((x: unknown) => typeof x === "function");
   };
+
+  const createHttpClientError = (status: number, data: unknown): HttpClientError =>
+    Object.assign(Object.create(HttpClientError.prototype), { status, data });
 
   const createMockOpenApiSpec = (overrides?: Partial<OpenAPIV3.Document>): OpenAPIV3.Document => ({
     openapi: "3.0.0",
@@ -67,6 +70,47 @@ describe("MCPProxy", () => {
 
       expect(result.tools[0].name.length).toBeLessThanOrEqual(64);
     });
+
+    it("should expose conservative annotations derived from HTTP methods", async () => {
+      const annotatedProxy = new MCPProxy(
+        "test-proxy",
+        createMockOpenApiSpec({
+          paths: {
+            "/resources": {
+              get: { operationId: "listResources", responses: { "200": { description: "Success" } } },
+              post: { operationId: "createResource", responses: { "201": { description: "Created" } } },
+              patch: { operationId: "patchResource", responses: { "200": { description: "Updated" } } },
+              put: { operationId: "replaceResource", responses: { "200": { description: "Replaced" } } },
+              delete: { operationId: "deleteResource", responses: { "204": { description: "Deleted" } } },
+            },
+          },
+        }),
+      );
+      const [listToolsHandler] = getHandlers(annotatedProxy);
+      const result = await listToolsHandler();
+      const annotations = Object.fromEntries(result.tools.map((tool: any) => [tool.name, tool.annotations]));
+
+      expect(annotations["API-listResources"]).toEqual({
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      });
+      expect(annotations["API-createResource"]).toEqual({
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: false,
+      });
+      expect(annotations["API-patchResource"]).toEqual(annotations["API-createResource"]);
+      expect(annotations["API-replaceResource"]).toEqual({
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: false,
+      });
+      expect(annotations["API-deleteResource"]).toEqual(annotations["API-replaceResource"]);
+    });
   });
 
   describe("callTool handler", () => {
@@ -102,6 +146,50 @@ describe("MCPProxy", () => {
       await expect(callToolHandler({ params: { name: "nonExistentMethod", arguments: {} } })).rejects.toThrow(
         "Method nonExistentMethod not found",
       );
+    });
+
+    it("should mark HTTP failures as MCP errors and preserve Anytype error details", async () => {
+      (HttpClient.prototype.executeOperation as ReturnType<typeof vi.fn>).mockRejectedValue(
+        createHttpClientError(500, {
+          status: 418,
+          object: "error",
+          code: "internal_server_error",
+          message: "failed to create block",
+        }),
+      );
+
+      const [, callToolHandler] = getHandlers(proxy);
+      const result = await callToolHandler({ params: { name: "API-getTest", arguments: {} } });
+
+      expect(result).toEqual({
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              status: 418,
+              object: "error",
+              code: "internal_server_error",
+              message: "failed to create block",
+              http_status: 500,
+            }),
+          },
+        ],
+      });
+    });
+
+    it("should include the HTTP status when an error response is not structured", async () => {
+      (HttpClient.prototype.executeOperation as ReturnType<typeof vi.fn>).mockRejectedValue(
+        createHttpClientError(502, "upstream unavailable"),
+      );
+
+      const [, callToolHandler] = getHandlers(proxy);
+      const result = await callToolHandler({ params: { name: "API-getTest", arguments: {} } });
+
+      expect(result).toEqual({
+        isError: true,
+        content: [{ type: "text", text: JSON.stringify({ data: "upstream unavailable", status: 502 }) }],
+      });
     });
 
     it("should handle tool names exceeding 64 characters", async () => {
