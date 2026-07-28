@@ -3,6 +3,8 @@ import { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { CallToolRequestSchema, ListToolsRequestSchema, Tool } from "@modelcontextprotocol/sdk/types.js";
 import { JSONSchema7 as IJsonSchema } from "json-schema";
 import { Headers } from "node-fetch";
+import { Buffer } from "node:buffer";
+import { URL } from "node:url";
 import { OpenAPIV3 } from "openapi-types";
 import { HttpClient, HttpClientError } from "../client/http-client";
 import { OpenAPIToMCPConverter } from "../openapi/parser";
@@ -89,14 +91,7 @@ export class MCPProxy {
         const response = await this.httpClient.executeOperation(operation, params);
 
         // Convert response to MCP format
-        return {
-          content: [
-            {
-              type: "text", // currently this is the only type that seems to be used by mcp server
-              text: JSON.stringify(response.data), // TODO: pass through the http status code text?
-            },
-          ],
-        };
+        return { content: [this.formatResponse(response.data, response.headers, operation, params)] };
       } catch (error) {
         console.error("Error in tool call", error);
         if (error instanceof HttpClientError) {
@@ -152,6 +147,64 @@ export class MCPProxy {
       return "image";
     }
     return "binary";
+  }
+
+  private formatResponse(
+    data: unknown,
+    headers: Headers,
+    operation: OpenAPIV3.OperationObject,
+    params: Record<string, unknown> | undefined,
+  ) {
+    const contentType = this.getContentType(headers);
+    const mimeType = headers.get("content-type")?.split(";", 1)[0]?.trim() || "application/octet-stream";
+    const binaryData = this.toBuffer(data);
+
+    // Preserve the existing JSON/text response behavior. Some APIs omit a
+    // Content-Type header, so only treat actual byte containers as binary.
+    if (contentType === "text" || !binaryData) {
+      return {
+        type: "text" as const,
+        text: JSON.stringify(data),
+      };
+    }
+
+    const base64Data = binaryData.toString("base64");
+    if (contentType === "image") {
+      return {
+        type: "image" as const,
+        data: base64Data,
+        mimeType,
+      };
+    }
+
+    return {
+      type: "resource" as const,
+      resource: {
+        uri: this.buildResourceUri(operation, params),
+        blob: base64Data,
+        mimeType,
+      },
+    };
+  }
+
+  private toBuffer(data: unknown): Buffer | null {
+    if (Buffer.isBuffer(data)) return data;
+    if (data instanceof ArrayBuffer) return Buffer.from(data);
+    if (ArrayBuffer.isView(data)) return Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+    return null;
+  }
+
+  private buildResourceUri(operation: OpenAPIV3.OperationObject, params: Record<string, unknown> | undefined): string {
+    const operationId = encodeURIComponent(operation.operationId || "response");
+    const resourceUri = new URL(`anytype://api/${operationId}`);
+
+    for (const [key, value] of Object.entries(params ?? {})) {
+      if (value !== undefined && value !== null && typeof value !== "object") {
+        resourceUri.searchParams.set(key, String(value));
+      }
+    }
+
+    return resourceUri.toString();
   }
 
   private truncateToolName(name: string): string {
