@@ -20,6 +20,7 @@ type FunctionParameters = {
 export class OpenAPIToMCPConverter {
   private schemaCache: Record<string, IJsonSchema> = {};
   private nameCounter: number = 0;
+  private referencedSchemas: Set<string> = new Set();
 
   constructor(private openApiSpec: OpenAPIV3.Document | OpenAPIV3_1.Document) {}
 
@@ -62,6 +63,8 @@ export class OpenAPIToMCPConverter {
       }
       if (!resolveRefs) {
         if (ref.startsWith("#/components/schemas/")) {
+          const schemaName = ref.replace("#/components/schemas/", "");
+          this.referencedSchemas.add(schemaName);
           return {
             $ref: ref.replace(/^#\/components\/schemas\//, "#/$defs/"),
             ...("description" in schema ? { description: schema.description as string } : {}),
@@ -78,6 +81,8 @@ export class OpenAPIToMCPConverter {
 
       // If already cached, return immediately with description
       if (this.schemaCache[ref]) {
+        // Scan cached schema for $refs to track them for this operation's $defs
+        this.trackRefsInSchema(this.schemaCache[ref]);
         return this.schemaCache[ref];
       }
 
@@ -85,6 +90,10 @@ export class OpenAPIToMCPConverter {
       if (!resolved) {
         // TODO: need extensive tests for this and we definitely need to handle the case of self references
         console.error(`Failed to resolve ref ${ref}`);
+        if (ref.startsWith("#/components/schemas/")) {
+          const schemaName = ref.replace("#/components/schemas/", "");
+          this.referencedSchemas.add(schemaName);
+        }
         return {
           $ref: ref.replace(/^#\/components\/schemas\//, "#/$defs/"),
           description: "description" in schema ? ((schema.description as string) ?? "") : "",
@@ -412,6 +421,100 @@ export class OpenAPIToMCPConverter {
     }
     return schema;
   }
+
+  /**
+   * Get only the schemas that are actually referenced via $ref.
+   * This populates $defs with only what's needed to resolve references.
+   * Uses iterative collection to handle nested references (transitive closure).
+   */
+  private getReferencedDefs(): Record<string, IJsonSchema> {
+    if (this.referencedSchemas.size === 0) {
+      return {};
+    }
+    const components = this.openApiSpec.components || {};
+    const schemas = components.schemas || {};
+    const defs: Record<string, IJsonSchema> = {};
+    const processed = new Set<string>();
+
+    // Keep processing until no new schemas are added (transitive closure)
+    while (this.referencedSchemas.size > processed.size) {
+      // Get schemas that haven't been processed yet
+      const toProcess = [...this.referencedSchemas].filter((name) => !processed.has(name));
+
+      for (const schemaName of toProcess) {
+        processed.add(schemaName);
+        if (schemas[schemaName]) {
+          // Convert without resolving refs to preserve $ref structure.
+          // This may add more schemas to referencedSchemas which will be
+          // processed in the next iteration.
+          defs[schemaName] = this.convertOpenApiSchemaToJsonSchema(
+            schemas[schemaName] as OpenAPIV3.SchemaObject | OpenAPIV3.ReferenceObject,
+            new Set(),
+            false, // Don't resolve refs within the definition
+          );
+        }
+      }
+    }
+    return defs;
+  }
+
+  /**
+   * Clear tracked references. Call before processing a new operation
+   * to ensure $defs only contains schemas referenced by that operation.
+   */
+  private clearReferencedSchemas(): void {
+    this.referencedSchemas.clear();
+  }
+
+  /**
+   * Recursively scan a schema for $ref to #/$defs/X and track them.
+   * This is needed when returning cached schemas, as their internal
+   * refs need to be tracked for the current operation's $defs.
+   */
+  private trackRefsInSchema(schema: IJsonSchema): void {
+    if (!schema || typeof schema !== "object") return;
+
+    // Check if this schema has a $ref to $defs
+    if (schema.$ref && typeof schema.$ref === "string" && schema.$ref.startsWith("#/$defs/")) {
+      const schemaName = schema.$ref.replace("#/$defs/", "");
+      this.referencedSchemas.add(schemaName);
+    }
+
+    // Recursively check properties
+    if (schema.properties) {
+      for (const prop of Object.values(schema.properties)) {
+        if (prop && typeof prop === "object") {
+          this.trackRefsInSchema(prop as IJsonSchema);
+        }
+      }
+    }
+
+    // Check items (for arrays)
+    if (schema.items) {
+      if (Array.isArray(schema.items)) {
+        for (const item of schema.items) {
+          this.trackRefsInSchema(item as IJsonSchema);
+        }
+      } else {
+        this.trackRefsInSchema(schema.items as IJsonSchema);
+      }
+    }
+
+    // Check allOf, anyOf, oneOf
+    for (const key of ["allOf", "anyOf", "oneOf"] as const) {
+      const arr = schema[key];
+      if (Array.isArray(arr)) {
+        for (const item of arr) {
+          this.trackRefsInSchema(item as IJsonSchema);
+        }
+      }
+    }
+
+    // Check additionalProperties
+    if (schema.additionalProperties && typeof schema.additionalProperties === "object") {
+      this.trackRefsInSchema(schema.additionalProperties as IJsonSchema);
+    }
+  }
   /**
    * Helper method to convert an operation to a JSON Schema for parameters
    */
@@ -420,11 +523,14 @@ export class OpenAPIToMCPConverter {
     method: string,
     path: string,
   ): IJsonSchema & { type: "object" } {
+    // Clear referenced schemas tracking for this operation
+    this.clearReferencedSchemas();
+
     const schema: IJsonSchema & { type: "object" } = {
       type: "object",
       properties: {},
       required: [],
-      $defs: {}, // Omit this.convertComponentsToJsonSchema() to reduce definition size
+      $defs: {}, // Will be populated with referenced schemas after conversion
     };
 
     // Handle parameters (path, query, header, cookie)
@@ -470,6 +576,12 @@ export class OpenAPIToMCPConverter {
           }
         }
       }
+    }
+
+    // Populate $defs with only the schemas that were actually referenced
+    const referencedDefs = this.getReferencedDefs();
+    if (Object.keys(referencedDefs).length > 0) {
+      schema.$defs = referencedDefs;
     }
 
     return schema;
@@ -543,10 +655,13 @@ export class OpenAPIToMCPConverter {
       return null;
     }
 
+    // Clear referenced schemas tracking for this operation
+    this.clearReferencedSchemas();
+
     const methodName = operation.operationId;
 
     const inputSchema: IJsonSchema & { type: "object" } = {
-      $defs: {}, // Omit this.convertComponentsToJsonSchema() to reduce definition size
+      $defs: {}, // Will be populated with referenced schemas after conversion
       type: "object",
       properties: {},
       required: [],
@@ -643,6 +758,15 @@ export class OpenAPIToMCPConverter {
     // Extract return type (output schema)
     const outputSchema = this.extractResponseType(operation.responses);
 
+    // Populate $defs with only the schemas that were actually referenced
+    const referencedDefs = this.getReferencedDefs();
+    if (Object.keys(referencedDefs).length > 0) {
+      inputSchema.$defs = referencedDefs;
+      if (outputSchema) {
+        outputSchema.$defs = referencedDefs;
+      }
+    }
+
     // Generate Zod schema from input schema
     try {
       // const zodSchemaStr = jsonSchemaToZod(inputSchema, { module: "cjs" })
@@ -682,7 +806,7 @@ export class OpenAPIToMCPConverter {
         new Set(),
         true,
       );
-      outputSchema["$defs"] = {}; // Omit this.convertComponentsToJsonSchema() to reduce definition size
+      // Note: $defs is populated by the caller (convertOperationToMCPMethod) with referenced schemas
 
       // Preserve the response description if available and not already set
       if (responseObj.description && !outputSchema.description) {
