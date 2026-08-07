@@ -136,6 +136,7 @@ Here are some examples of how you can interact with your Anytype:
 - "Add a new object of type 'Task' with title 'Research AI trends' to the 'Project Ideas' space"
 - "Create a second one with title 'Dive deep into LLMs' with due date in 3 days and assign it to me"
 - "Now create a collection with the title "Tasks for this week" and add the two tasks to that list. Set due date of the first one to 10 days from now"
+- "Fetch the latest details of the tasks with IDs 'task-1', 'task-2', and 'task-3' in one go"
 
 ## Development
 

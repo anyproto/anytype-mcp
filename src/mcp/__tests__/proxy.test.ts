@@ -233,4 +233,44 @@ describe("MCPProxy", () => {
       expect(server.connect).toHaveBeenCalledWith(mockTransport);
     });
   });
+
+  describe("custom tool: batch_get_objects", () => {
+    it("is exposed via tools/list", async () => {
+      const [listToolsHandler] = getHandlers(proxy);
+      const result = await listToolsHandler();
+      const names = result.tools.map((t: { name: string }) => t.name);
+
+      expect(names).toContain("batch_get_objects");
+    });
+
+    it("fans out get_object calls and aggregates the result", async () => {
+      (HttpClient.prototype.executeOperation as ReturnType<typeof vi.fn>).mockImplementation(
+        (_op: unknown, params: { object_id: string }) => {
+          if (params.object_id === "missing") {
+            return Promise.reject({ status: 404, message: "Not Found" });
+          }
+          return Promise.resolve({ data: { id: params.object_id }, status: 200, headers: new Headers() });
+        },
+      );
+
+      (proxy as any).openApiLookup = {
+        "API-get-object": {
+          operationId: "get_object",
+          method: "get",
+          path: "/v1/spaces/{space_id}/objects/{object_id}",
+          responses: { "200": { description: "The retrieved object" } },
+        },
+      };
+
+      const [, callToolHandler] = getHandlers(proxy);
+      const result = await callToolHandler({
+        params: { name: "batch_get_objects", arguments: { space_id: "space-1", object_ids: ["found", "missing"] } },
+      });
+
+      const parsed = JSON.parse(result.content[0].text);
+      expect(parsed.found).toEqual([{ id: "found" }]);
+      expect(parsed.missing).toEqual(["missing"]);
+      expect(parsed.failed).toEqual([]);
+    });
+  });
 });

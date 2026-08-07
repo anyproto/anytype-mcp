@@ -4,9 +4,11 @@ import { CallToolRequestSchema, ListToolsRequestSchema, Tool } from "@modelconte
 import { JSONSchema7 as IJsonSchema } from "json-schema";
 import { Headers } from "node-fetch";
 import { OpenAPIV3 } from "openapi-types";
+import { ZodError } from "zod";
 import { HttpClient, HttpClientError } from "../client/http-client";
 import { OpenAPIToMCPConverter } from "../openapi/parser";
 import { determineBaseUrl } from "../utils/base-url";
+import { BATCH_GET_OBJECTS_TOOL_NAME, batchGetObjectsInputSchema, runBatchGetObjects } from "./custom-tools";
 
 type PathItemObject = OpenAPIV3.PathItemObject & {
   get?: OpenAPIV3.OperationObject;
@@ -69,6 +71,15 @@ export class MCPProxy {
         });
       });
 
+      // Add custom tools that are not derived from the OpenAPI spec
+      tools.push({
+        name: BATCH_GET_OBJECTS_TOOL_NAME,
+        description:
+          "Fetch multiple objects by ID in a single call. Returns successfully fetched objects " +
+          "alongside the IDs that could not be retrieved instead of failing the whole request.",
+        inputSchema: batchGetObjectsInputSchema as Tool["inputSchema"],
+      });
+
       return { tools };
     });
 
@@ -76,6 +87,26 @@ export class MCPProxy {
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
       console.error("calling tool", request.params);
       const { name, arguments: params } = request.params;
+
+      // Route custom tools before falling back to the OpenAPI-generated ones
+      if (name === BATCH_GET_OBJECTS_TOOL_NAME) {
+        try {
+          const result = await runBatchGetObjects(this.httpClient, this.openApiLookup, params);
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(result),
+              },
+            ],
+          };
+        } catch (error) {
+          if (error instanceof ZodError) {
+            throw new Error(`Invalid arguments for ${BATCH_GET_OBJECTS_TOOL_NAME}: ${error.message}`, { cause: error });
+          }
+          throw error;
+        }
+      }
 
       // Find the operation in OpenAPI spec
       const operation = this.findOperation(name);
