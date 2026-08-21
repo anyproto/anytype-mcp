@@ -6,6 +6,7 @@ import { Headers } from "node-fetch";
 import { OpenAPIV3 } from "openapi-types";
 import { HttpClient, HttpClientError } from "../client/http-client";
 import { OpenAPIToMCPConverter } from "../openapi/parser";
+import { ToolOverrides } from "../tools";
 import { determineBaseUrl } from "../utils/base-url";
 
 type PathItemObject = OpenAPIV3.PathItemObject & {
@@ -46,7 +47,17 @@ export class MCPProxy {
     const converter = new OpenAPIToMCPConverter(openApiSpec);
     const { tools, openApiLookup } = converter.convertToMCPTools();
     this.tools = tools;
-    this.openApiLookup = openApiLookup;
+
+    // Normalize openApiLookup to index both full and truncated names (<= 64 chars)
+    const normalizedLookup: Record<string, OpenAPIV3.OperationObject & { method: string; path: string }> = {};
+    for (const [key, val] of Object.entries(openApiLookup)) {
+      normalizedLookup[key] = val;
+      const truncated = this.truncateToolName(key);
+      if (truncated !== key) {
+        normalizedLookup[truncated] = val;
+      }
+    }
+    this.openApiLookup = normalizedLookup;
 
     this.setupHandlers();
   }
@@ -84,9 +95,32 @@ export class MCPProxy {
         throw new Error(`Method ${name} not found`);
       }
 
+      // Validate with ToolOverrides if defined
+      let validatedParams: Record<string, unknown> | undefined = params;
+      if (name in ToolOverrides) {
+        const parseResult = ToolOverrides[name].zodSchema.safeParse(params);
+        if (!parseResult.success) {
+          console.error("Validation error in tool call:", parseResult.error.format());
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  status: "error",
+                  error: `Validation failed for tool '${name}'`,
+                  details: parseResult.error.issues,
+                }),
+              },
+            ],
+            isError: true,
+          };
+        }
+        validatedParams = parseResult.data as Record<string, unknown>;
+      }
+
       try {
         // Execute the operation
-        const response = await this.httpClient.executeOperation(operation, params);
+        const response = await this.httpClient.executeOperation(operation, validatedParams);
 
         // Convert response to MCP format
         return {
@@ -112,6 +146,7 @@ export class MCPProxy {
                 }),
               },
             ],
+            isError: true,
           };
         }
         throw error;

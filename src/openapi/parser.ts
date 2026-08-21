@@ -2,6 +2,7 @@ import type { Tool } from "@anthropic-ai/sdk/resources/messages/messages";
 import type { JSONSchema7 as IJsonSchema } from "json-schema";
 import type { ChatCompletionTool } from "openai/resources/chat/completions";
 import type { OpenAPIV3, OpenAPIV3_1 } from "openapi-types";
+import { ToolOverrides } from "../tools";
 
 type NewToolMethod = {
   name: string;
@@ -420,6 +421,11 @@ export class OpenAPIToMCPConverter {
     method: string,
     path: string,
   ): IJsonSchema & { type: "object" } {
+    const fullToolName = `API-${operation.operationId?.replaceAll("_", "-")}`;
+    if (fullToolName in ToolOverrides) {
+      return ToolOverrides[fullToolName].inputSchema;
+    }
+
     const schema: IJsonSchema & { type: "object" } = {
       type: "object",
       properties: {},
@@ -544,81 +550,88 @@ export class OpenAPIToMCPConverter {
     }
 
     const methodName = operation.operationId;
+    const fullToolName = `API-${methodName.replaceAll("_", "-")}`;
 
-    const inputSchema: IJsonSchema & { type: "object" } = {
-      $defs: {}, // Omit this.convertComponentsToJsonSchema() to reduce definition size
-      type: "object",
-      properties: {},
-      required: [],
-    };
+    let inputSchema: IJsonSchema & { type: "object" };
 
-    // Handle parameters (path, query, header, cookie)
-    if (operation.parameters) {
-      for (const param of operation.parameters) {
-        const paramObj = this.resolveParameter(param);
-        if (paramObj && paramObj.schema) {
-          // do not include Anytype-Version in the input schema, it's set in http client header by proxy
-          if (paramObj.name === "Anytype-Version") {
-            continue;
-          }
-          const schema = this.convertOpenApiSchemaToJsonSchema(paramObj.schema, new Set(), true);
-          // Merge parameter-level description if available
-          if (paramObj.description) {
-            schema.description = paramObj.description;
-          }
-          inputSchema.properties![paramObj.name] = schema;
-          if (paramObj.required) {
-            inputSchema.required!.push(paramObj.name);
+    if (fullToolName in ToolOverrides) {
+      inputSchema = ToolOverrides[fullToolName].inputSchema;
+    } else {
+      inputSchema = {
+        $defs: {}, // Omit this.convertComponentsToJsonSchema() to reduce definition size
+        type: "object",
+        properties: {},
+        required: [],
+      };
+
+      // Handle parameters (path, query, header, cookie)
+      if (operation.parameters) {
+        for (const param of operation.parameters) {
+          const paramObj = this.resolveParameter(param);
+          if (paramObj && paramObj.schema) {
+            // do not include Anytype-Version in the input schema, it's set in http client header by proxy
+            if (paramObj.name === "Anytype-Version") {
+              continue;
+            }
+            const schema = this.convertOpenApiSchemaToJsonSchema(paramObj.schema, new Set(), true);
+            // Merge parameter-level description if available
+            if (paramObj.description) {
+              schema.description = paramObj.description;
+            }
+            inputSchema.properties![paramObj.name] = schema;
+            if (paramObj.required) {
+              inputSchema.required!.push(paramObj.name);
+            }
           }
         }
       }
-    }
 
-    // Handle requestBody
-    if (operation.requestBody) {
-      const bodyObj = this.resolveRequestBody(operation.requestBody);
-      if (bodyObj?.content) {
-        // Handle multipart/form-data for file uploads
-        // We convert the multipart/form-data schema to a JSON schema and we require
-        // that the user passes in a string for each file that points to the local file
-        if (bodyObj.content["multipart/form-data"]?.schema) {
-          const formSchema = this.convertOpenApiSchemaToJsonSchema(
-            bodyObj.content["multipart/form-data"].schema,
-            new Set(),
-            true,
-          );
-          if (formSchema.type === "object" && formSchema.properties) {
-            for (const [name, propSchema] of Object.entries(formSchema.properties)) {
-              // TODO: Add support for filters
-              if (name === "filters") continue;
-              inputSchema.properties![name] = propSchema;
-            }
-            if (formSchema.required) {
-              inputSchema.required!.push(...formSchema.required!.filter((r) => r !== "filters"));
+      // Handle requestBody
+      if (operation.requestBody) {
+        const bodyObj = this.resolveRequestBody(operation.requestBody);
+        if (bodyObj?.content) {
+          // Handle multipart/form-data for file uploads
+          // We convert the multipart/form-data schema to a JSON schema and we require
+          // that the user passes in a string for each file that points to the local file
+          if (bodyObj.content["multipart/form-data"]?.schema) {
+            const formSchema = this.convertOpenApiSchemaToJsonSchema(
+              bodyObj.content["multipart/form-data"].schema,
+              new Set(),
+              true,
+            );
+            if (formSchema.type === "object" && formSchema.properties) {
+              for (const [name, propSchema] of Object.entries(formSchema.properties)) {
+                // TODO: Add support for filters
+                if (name === "filters") continue;
+                inputSchema.properties![name] = propSchema;
+              }
+              if (formSchema.required) {
+                inputSchema.required!.push(...formSchema.required!.filter((r) => r !== "filters"));
+              }
             }
           }
-        }
-        // Handle application/json
-        else if (bodyObj.content["application/json"]?.schema) {
-          const bodySchema = this.convertOpenApiSchemaToJsonSchema(
-            bodyObj.content["application/json"].schema,
-            new Set(),
-            true,
-          );
-          // Merge body schema into the inputSchema's properties
-          if (bodySchema.type === "object" && bodySchema.properties) {
-            for (const [name, propSchema] of Object.entries(bodySchema.properties)) {
-              // TODO: Add support for filters
-              if (name === "filters") continue;
-              inputSchema.properties![name] = propSchema;
+          // Handle application/json
+          else if (bodyObj.content["application/json"]?.schema) {
+            const bodySchema = this.convertOpenApiSchemaToJsonSchema(
+              bodyObj.content["application/json"].schema,
+              new Set(),
+              true,
+            );
+            // Merge body schema into the inputSchema's properties
+            if (bodySchema.type === "object" && bodySchema.properties) {
+              for (const [name, propSchema] of Object.entries(bodySchema.properties)) {
+                // TODO: Add support for filters
+                if (name === "filters") continue;
+                inputSchema.properties![name] = propSchema;
+              }
+              if (bodySchema.required) {
+                inputSchema.required!.push(...bodySchema.required!.filter((r) => r !== "filters"));
+              }
+            } else {
+              // If the request body is not an object, just put it under "body"
+              inputSchema.properties!["body"] = bodySchema;
+              inputSchema.required!.push("body");
             }
-            if (bodySchema.required) {
-              inputSchema.required!.push(...bodySchema.required!.filter((r) => r !== "filters"));
-            }
-          } else {
-            // If the request body is not an object, just put it under "body"
-            inputSchema.properties!["body"] = bodySchema;
-            inputSchema.required!.push("body");
           }
         }
       }

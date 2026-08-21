@@ -1938,160 +1938,375 @@
           "name": "create-object",
           "description": "Create object\nError Responses:\n400: Bad request\n401: Unauthorized\n429: Rate limit exceeded\n500: Internal server error",
           "inputSchema": {
-            "$defs": {},
             "type": "object",
             "properties": {
               "space_id": {
                 "type": "string",
-                "description": "The ID of the space in which to create the object; must be retrieved from ListSpaces endpoint"
-              },
-              "body": {
-                "type": "string",
-                "description": "The body of the object"
-              },
-              "icon": {
-                "type": "object",
-                "description": "The icon of the object, or null if the object has no icon",
-                "properties": {
-                  "emoji": {
-                    "type": "string",
-                    "description": "The emoji of the icon"
-                  },
-                  "format": {
-                    "type": "string",
-                    "description": "The format of the icon",
-                    "enum": [
-                      "emoji"
-                    ]
-                  }
-                },
-                "additionalProperties": true
-              },
-              "name": {
-                "type": "string",
-                "description": "The name of the object"
-              },
-              "properties": {
-                "type": "array",
-                "description": "The properties to set on the object; see ListTypes or GetType endpoints for linked properties",
-                "items": {
-                  "type": "object",
-                  "properties": {
-                    "key": {
-                      "type": "string",
-                      "description": "The key of the property",
-                      "examples": [
-                        "last_modified_date"
-                      ]
-                    },
-                    "text": {
-                      "type": "string",
-                      "description": "The text value, if applicable",
-                      "examples": [
-                        "Some text..."
-                      ]
-                    },
-                    "number": {
-                      "type": "number",
-                      "description": "The number value, if applicable",
-                      "examples": [
-                        42
-                      ]
-                    },
-                    "select": {
-                      "type": "string",
-                      "description": "The selected tag id, if applicable",
-                      "examples": [
-                        "tag_id"
-                      ]
-                    },
-                    "multi_select": {
-                      "type": "array",
-                      "description": "The selected tag ids, if applicable",
-                      "items": {
-                        "type": "string"
-                      },
-                      "examples": [
-                        [
-                          "tag_id"
-                        ]
-                      ]
-                    },
-                    "date": {
-                      "type": "string",
-                      "description": "The date value in ISO 8601 format, if applicable",
-                      "examples": [
-                        "2025-02-14T12:34:56Z"
-                      ]
-                    },
-                    "files": {
-                      "type": "array",
-                      "description": "The file ids, if applicable",
-                      "items": {
-                        "type": "string"
-                      },
-                      "examples": [
-                        [
-                          "['file_id']"
-                        ]
-                      ]
-                    },
-                    "checkbox": {
-                      "type": "boolean",
-                      "description": "The checkbox value, if applicable",
-                      "examples": [
-                        true
-                      ]
-                    },
-                    "url": {
-                      "type": "string",
-                      "description": "The url value, if applicable",
-                      "examples": [
-                        "https://example.com"
-                      ]
-                    },
-                    "email": {
-                      "type": "string",
-                      "description": "The email value, if applicable",
-                      "examples": [
-                        "example@example.com"
-                      ]
-                    },
-                    "phone": {
-                      "type": "string",
-                      "description": "The phone number value, if applicable",
-                      "examples": [
-                        "+1234567890"
-                      ]
-                    },
-                    "objects": {
-                      "type": "array",
-                      "description": "The object ids, if applicable",
-                      "items": {
-                        "type": "string"
-                      },
-                      "examples": [
-                        [
-                          "['object_id']"
-                        ]
-                      ]
-                    }
-                  }
-                }
-              },
-              "template_id": {
-                "type": "string",
-                "description": "The id of the template to use"
+                "description": "The ID of the space to create the object in"
               },
               "type_key": {
                 "type": "string",
-                "description": "The key of the type of object to create"
+                "description": "The key of the object type (e.g. 'page', 'task', 'bookmark')"
+              },
+              "name": {
+                "description": "The name of the object",
+                "type": "string"
+              },
+              "body": {
+                "description": "The initial body text or markdown of the object",
+                "type": "string"
+              },
+              "icon": {
+                "anyOf": [
+                  {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "emoji": {
+                            "type": "string",
+                            "description": "Emoji character for the icon (e.g. '📄', '🚀')"
+                          },
+                          "format": {
+                            "description": "Icon format ('emoji')",
+                            "type": "string",
+                            "const": "emoji"
+                          }
+                        },
+                        "required": [
+                          "emoji"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "file": {
+                            "type": "string",
+                            "description": "File ID of the icon image"
+                          },
+                          "format": {
+                            "type": "string",
+                            "const": "file",
+                            "description": "Icon format ('file')"
+                          }
+                        },
+                        "required": [
+                          "file",
+                          "format"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string",
+                            "description": "Name of the icon (e.g. 'alarm', 'archive', 'star')"
+                          },
+                          "color": {
+                            "description": "Color of the icon",
+                            "type": "string"
+                          },
+                          "format": {
+                            "description": "Icon format ('icon')",
+                            "type": "string",
+                            "const": "icon"
+                          }
+                        },
+                        "required": [
+                          "name"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The icon of the object, or null to remove the icon"
+              },
+              "template_id": {
+                "description": "The ID of the template to instantiate from",
+                "type": "string"
+              },
+              "properties": {
+                "description": "Object properties to set",
+                "type": "array",
+                "items": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "key": {
+                          "type": "string",
+                          "description": "The property key (e.g. 'description', 'notes')"
+                        },
+                        "format": {
+                          "type": "string",
+                          "const": "text"
+                        },
+                        "text": {
+                          "type": "string",
+                          "description": "The text value of the property"
+                        }
+                      },
+                      "required": [
+                        "key",
+                        "format",
+                        "text"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "key": {
+                          "type": "string",
+                          "description": "The property key (e.g. 'priority', 'count')"
+                        },
+                        "format": {
+                          "type": "string",
+                          "const": "number"
+                        },
+                        "number": {
+                          "type": "number",
+                          "description": "The numerical value of the property"
+                        }
+                      },
+                      "required": [
+                        "key",
+                        "format",
+                        "number"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "key": {
+                          "type": "string",
+                          "description": "The property key (e.g. 'status')"
+                        },
+                        "format": {
+                          "type": "string",
+                          "const": "select"
+                        },
+                        "select": {
+                          "type": "string",
+                          "description": "Selected tag key or ID"
+                        }
+                      },
+                      "required": [
+                        "key",
+                        "format",
+                        "select"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "key": {
+                          "type": "string",
+                          "description": "The property key (e.g. 'tags')"
+                        },
+                        "format": {
+                          "type": "string",
+                          "const": "multi_select"
+                        },
+                        "multi_select": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          },
+                          "description": "Array of selected tag keys or IDs"
+                        }
+                      },
+                      "required": [
+                        "key",
+                        "format",
+                        "multi_select"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "key": {
+                          "type": "string",
+                          "description": "The property key (e.g. 'due_date')"
+                        },
+                        "format": {
+                          "type": "string",
+                          "const": "date"
+                        },
+                        "date": {
+                          "type": "string",
+                          "description": "Date in RFC3339 or ISO 8601 format (e.g. '2026-08-21T12:00:00Z' or '2026-08-21')"
+                        }
+                      },
+                      "required": [
+                        "key",
+                        "format",
+                        "date"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "key": {
+                          "type": "string",
+                          "description": "The property key (e.g. 'attachments')"
+                        },
+                        "format": {
+                          "type": "string",
+                          "const": "files"
+                        },
+                        "files": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          },
+                          "description": "Array of file IDs"
+                        }
+                      },
+                      "required": [
+                        "key",
+                        "format",
+                        "files"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "key": {
+                          "type": "string",
+                          "description": "The property key (e.g. 'done', 'archived')"
+                        },
+                        "format": {
+                          "type": "string",
+                          "const": "checkbox"
+                        },
+                        "checkbox": {
+                          "type": "boolean",
+                          "description": "Boolean checkbox state (true/false)"
+                        }
+                      },
+                      "required": [
+                        "key",
+                        "format",
+                        "checkbox"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "key": {
+                          "type": "string",
+                          "description": "The property key (e.g. 'website', 'source')"
+                        },
+                        "format": {
+                          "type": "string",
+                          "const": "url"
+                        },
+                        "url": {
+                          "type": "string",
+                          "description": "URL string"
+                        }
+                      },
+                      "required": [
+                        "key",
+                        "format",
+                        "url"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "key": {
+                          "type": "string",
+                          "description": "The property key (e.g. 'email', 'contact')"
+                        },
+                        "format": {
+                          "type": "string",
+                          "const": "email"
+                        },
+                        "email": {
+                          "type": "string",
+                          "description": "Email address"
+                        }
+                      },
+                      "required": [
+                        "key",
+                        "format",
+                        "email"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "key": {
+                          "type": "string",
+                          "description": "The property key (e.g. 'phone')"
+                        },
+                        "format": {
+                          "type": "string",
+                          "const": "phone"
+                        },
+                        "phone": {
+                          "type": "string",
+                          "description": "Phone number string"
+                        }
+                      },
+                      "required": [
+                        "key",
+                        "format",
+                        "phone"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "key": {
+                          "type": "string",
+                          "description": "The property key (e.g. 'relations', 'links')"
+                        },
+                        "format": {
+                          "type": "string",
+                          "const": "objects"
+                        },
+                        "objects": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          },
+                          "description": "Array of linked object IDs"
+                        }
+                      },
+                      "required": [
+                        "key",
+                        "format",
+                        "objects"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
               }
             },
             "required": [
               "space_id",
               "type_key"
-            ]
+            ],
+            "additionalProperties": {}
           },
           "outputSchema": {
             "type": "object",
@@ -3053,160 +3268,375 @@
           "name": "update-object",
           "description": "Update object\nError Responses:\n400: Bad request\n401: Unauthorized\n404: Resource not found\n410: Resource deleted\n429: Rate limit exceeded\n500: Internal server error",
           "inputSchema": {
-            "$defs": {},
             "type": "object",
             "properties": {
               "space_id": {
                 "type": "string",
-                "description": "The ID of the space in which the object exists; must be retrieved from ListSpaces endpoint"
+                "description": "The ID of the space containing the object"
               },
               "object_id": {
                 "type": "string",
-                "description": "The ID of the object to update; must be retrieved from ListObjects, SearchSpace or GlobalSearch endpoints or obtained from response context"
-              },
-              "icon": {
-                "type": "object",
-                "description": "The icon of the object, or null if the object has no icon",
-                "properties": {
-                  "emoji": {
-                    "type": "string",
-                    "description": "The emoji of the icon"
-                  },
-                  "format": {
-                    "type": "string",
-                    "description": "The format of the icon",
-                    "enum": [
-                      "emoji"
-                    ]
-                  }
-                },
-                "additionalProperties": true
-              },
-              "markdown": {
-                "type": "string",
-                "description": "The updated body of the object"
+                "description": "The ID of the object to update"
               },
               "name": {
-                "type": "string",
-                "description": "The name of the object"
+                "description": "The updated name of the object",
+                "type": "string"
               },
-              "properties": {
-                "type": "array",
-                "description": "The properties to set for the object; see ListTypes or GetType endpoints for linked properties",
-                "items": {
-                  "type": "object",
-                  "properties": {
-                    "key": {
-                      "type": "string",
-                      "description": "The key of the property",
-                      "examples": [
-                        "last_modified_date"
-                      ]
-                    },
-                    "text": {
-                      "type": "string",
-                      "description": "The text value, if applicable",
-                      "examples": [
-                        "Some text..."
-                      ]
-                    },
-                    "number": {
-                      "type": "number",
-                      "description": "The number value, if applicable",
-                      "examples": [
-                        42
-                      ]
-                    },
-                    "select": {
-                      "type": "string",
-                      "description": "The selected tag id, if applicable",
-                      "examples": [
-                        "tag_id"
-                      ]
-                    },
-                    "multi_select": {
-                      "type": "array",
-                      "description": "The selected tag ids, if applicable",
-                      "items": {
-                        "type": "string"
+              "markdown": {
+                "description": "The updated markdown body of the object",
+                "type": "string"
+              },
+              "icon": {
+                "anyOf": [
+                  {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "emoji": {
+                            "type": "string",
+                            "description": "Emoji character for the icon (e.g. '📄', '🚀')"
+                          },
+                          "format": {
+                            "description": "Icon format ('emoji')",
+                            "type": "string",
+                            "const": "emoji"
+                          }
+                        },
+                        "required": [
+                          "emoji"
+                        ],
+                        "additionalProperties": false
                       },
-                      "examples": [
-                        [
-                          "tag_id"
-                        ]
-                      ]
-                    },
-                    "date": {
-                      "type": "string",
-                      "description": "The date value in ISO 8601 format, if applicable",
-                      "examples": [
-                        "2025-02-14T12:34:56Z"
-                      ]
-                    },
-                    "files": {
-                      "type": "array",
-                      "description": "The file ids, if applicable",
-                      "items": {
-                        "type": "string"
+                      {
+                        "type": "object",
+                        "properties": {
+                          "file": {
+                            "type": "string",
+                            "description": "File ID of the icon image"
+                          },
+                          "format": {
+                            "type": "string",
+                            "const": "file",
+                            "description": "Icon format ('file')"
+                          }
+                        },
+                        "required": [
+                          "file",
+                          "format"
+                        ],
+                        "additionalProperties": false
                       },
-                      "examples": [
-                        [
-                          "['file_id']"
-                        ]
-                      ]
-                    },
-                    "checkbox": {
-                      "type": "boolean",
-                      "description": "The checkbox value, if applicable",
-                      "examples": [
-                        true
-                      ]
-                    },
-                    "url": {
-                      "type": "string",
-                      "description": "The url value, if applicable",
-                      "examples": [
-                        "https://example.com"
-                      ]
-                    },
-                    "email": {
-                      "type": "string",
-                      "description": "The email value, if applicable",
-                      "examples": [
-                        "example@example.com"
-                      ]
-                    },
-                    "phone": {
-                      "type": "string",
-                      "description": "The phone number value, if applicable",
-                      "examples": [
-                        "+1234567890"
-                      ]
-                    },
-                    "objects": {
-                      "type": "array",
-                      "description": "The object ids, if applicable",
-                      "items": {
-                        "type": "string"
-                      },
-                      "examples": [
-                        [
-                          "['object_id']"
-                        ]
-                      ]
-                    }
+                      {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string",
+                            "description": "Name of the icon (e.g. 'alarm', 'archive', 'star')"
+                          },
+                          "color": {
+                            "description": "Color of the icon",
+                            "type": "string"
+                          },
+                          "format": {
+                            "description": "Icon format ('icon')",
+                            "type": "string",
+                            "const": "icon"
+                          }
+                        },
+                        "required": [
+                          "name"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ]
+                  },
+                  {
+                    "type": "null"
                   }
-                }
+                ],
+                "description": "The icon of the object, or null to remove the icon"
               },
               "type_key": {
-                "type": "string",
-                "description": "The key of the type of object to set"
+                "description": "The key of the type of object",
+                "type": "string"
+              },
+              "properties": {
+                "description": "Object properties to set/update",
+                "type": "array",
+                "items": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "key": {
+                          "type": "string",
+                          "description": "The property key (e.g. 'description', 'notes')"
+                        },
+                        "format": {
+                          "type": "string",
+                          "const": "text"
+                        },
+                        "text": {
+                          "type": "string",
+                          "description": "The text value of the property"
+                        }
+                      },
+                      "required": [
+                        "key",
+                        "format",
+                        "text"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "key": {
+                          "type": "string",
+                          "description": "The property key (e.g. 'priority', 'count')"
+                        },
+                        "format": {
+                          "type": "string",
+                          "const": "number"
+                        },
+                        "number": {
+                          "type": "number",
+                          "description": "The numerical value of the property"
+                        }
+                      },
+                      "required": [
+                        "key",
+                        "format",
+                        "number"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "key": {
+                          "type": "string",
+                          "description": "The property key (e.g. 'status')"
+                        },
+                        "format": {
+                          "type": "string",
+                          "const": "select"
+                        },
+                        "select": {
+                          "type": "string",
+                          "description": "Selected tag key or ID"
+                        }
+                      },
+                      "required": [
+                        "key",
+                        "format",
+                        "select"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "key": {
+                          "type": "string",
+                          "description": "The property key (e.g. 'tags')"
+                        },
+                        "format": {
+                          "type": "string",
+                          "const": "multi_select"
+                        },
+                        "multi_select": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          },
+                          "description": "Array of selected tag keys or IDs"
+                        }
+                      },
+                      "required": [
+                        "key",
+                        "format",
+                        "multi_select"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "key": {
+                          "type": "string",
+                          "description": "The property key (e.g. 'due_date')"
+                        },
+                        "format": {
+                          "type": "string",
+                          "const": "date"
+                        },
+                        "date": {
+                          "type": "string",
+                          "description": "Date in RFC3339 or ISO 8601 format (e.g. '2026-08-21T12:00:00Z' or '2026-08-21')"
+                        }
+                      },
+                      "required": [
+                        "key",
+                        "format",
+                        "date"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "key": {
+                          "type": "string",
+                          "description": "The property key (e.g. 'attachments')"
+                        },
+                        "format": {
+                          "type": "string",
+                          "const": "files"
+                        },
+                        "files": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          },
+                          "description": "Array of file IDs"
+                        }
+                      },
+                      "required": [
+                        "key",
+                        "format",
+                        "files"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "key": {
+                          "type": "string",
+                          "description": "The property key (e.g. 'done', 'archived')"
+                        },
+                        "format": {
+                          "type": "string",
+                          "const": "checkbox"
+                        },
+                        "checkbox": {
+                          "type": "boolean",
+                          "description": "Boolean checkbox state (true/false)"
+                        }
+                      },
+                      "required": [
+                        "key",
+                        "format",
+                        "checkbox"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "key": {
+                          "type": "string",
+                          "description": "The property key (e.g. 'website', 'source')"
+                        },
+                        "format": {
+                          "type": "string",
+                          "const": "url"
+                        },
+                        "url": {
+                          "type": "string",
+                          "description": "URL string"
+                        }
+                      },
+                      "required": [
+                        "key",
+                        "format",
+                        "url"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "key": {
+                          "type": "string",
+                          "description": "The property key (e.g. 'email', 'contact')"
+                        },
+                        "format": {
+                          "type": "string",
+                          "const": "email"
+                        },
+                        "email": {
+                          "type": "string",
+                          "description": "Email address"
+                        }
+                      },
+                      "required": [
+                        "key",
+                        "format",
+                        "email"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "key": {
+                          "type": "string",
+                          "description": "The property key (e.g. 'phone')"
+                        },
+                        "format": {
+                          "type": "string",
+                          "const": "phone"
+                        },
+                        "phone": {
+                          "type": "string",
+                          "description": "Phone number string"
+                        }
+                      },
+                      "required": [
+                        "key",
+                        "format",
+                        "phone"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "key": {
+                          "type": "string",
+                          "description": "The property key (e.g. 'relations', 'links')"
+                        },
+                        "format": {
+                          "type": "string",
+                          "const": "objects"
+                        },
+                        "objects": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          },
+                          "description": "Array of linked object IDs"
+                        }
+                      },
+                      "required": [
+                        "key",
+                        "format",
+                        "objects"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
               }
             },
             "required": [
               "space_id",
               "object_id"
-            ]
+            ],
+            "additionalProperties": {}
           },
           "outputSchema": {
             "type": "object",

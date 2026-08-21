@@ -2,11 +2,21 @@ import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { Headers } from "node-fetch";
 import { OpenAPIV3 } from "openapi-types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { HttpClient } from "../../client/http-client";
+import { HttpClient, HttpClientError } from "../../client/http-client";
 import { MCPProxy } from "../proxy";
 
 // Mock the dependencies
-vi.mock("../../client/http-client");
+vi.mock("../../client/http-client", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../client/http-client")>();
+  const MockHttpClient = vi.fn().mockImplementation(function (this: any) {
+    this.executeOperation = MockHttpClient.prototype.executeOperation;
+  });
+  MockHttpClient.prototype.executeOperation = vi.fn();
+  return {
+    ...actual,
+    HttpClient: MockHttpClient,
+  };
+});
 vi.mock("@modelcontextprotocol/sdk/server/index.js");
 
 describe("MCPProxy", () => {
@@ -124,6 +134,149 @@ describe("MCPProxy", () => {
       expect(result).toEqual({
         content: [{ type: "text", text: JSON.stringify({ message: "success" }) }],
       });
+    });
+
+    it("should validate and execute tool calls using ToolOverrides", async () => {
+      const executeMock = (HttpClient.prototype.executeOperation as ReturnType<typeof vi.fn>).mockResolvedValue(
+        mockSuccessResponse,
+      );
+
+      (proxy as any).openApiLookup = {
+        "API-create-object": {
+          operationId: "create_object",
+          responses: { "200": { description: "Success" } },
+          method: "post",
+          path: "/spaces/{space_id}/objects",
+        },
+      };
+
+      const [, callToolHandler] = getHandlers(proxy);
+      const result = await callToolHandler({
+        params: {
+          name: "API-create-object",
+          arguments: {
+            space_id: "space_123",
+            type_key: "page",
+            properties: [
+              {
+                key: "status",
+                format: "select",
+                select: "tag_1",
+                text: "extraneous dummy",
+              },
+            ],
+          },
+        },
+      });
+
+      expect(result.content[0].text).toBe(JSON.stringify({ message: "success" }));
+      expect(executeMock).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          space_id: "space_123",
+          type_key: "page",
+          properties: [{ key: "status", format: "select", select: "tag_1" }],
+        }),
+      );
+    });
+
+    it("should reject invalid tool calls using ToolOverrides with structured error", async () => {
+      (proxy as any).openApiLookup = {
+        "API-create-object": {
+          operationId: "create_object",
+          responses: { "200": { description: "Success" } },
+          method: "post",
+          path: "/spaces/{space_id}/objects",
+        },
+      };
+
+      const [, callToolHandler] = getHandlers(proxy);
+      const result = await callToolHandler({
+        params: {
+          name: "API-create-object",
+          arguments: {
+            // Missing space_id and type_key
+            name: "Invalid",
+          },
+        },
+      });
+
+      expect(result.isError).toBe(true);
+      const parsed = JSON.parse(result.content[0].text);
+      expect(parsed.status).toBe("error");
+      expect(parsed.details).toBeDefined();
+    });
+
+    it("should validate and execute API-update-object tool calls using ToolOverrides", async () => {
+      const executeMock = (HttpClient.prototype.executeOperation as ReturnType<typeof vi.fn>).mockResolvedValue(
+        mockSuccessResponse,
+      );
+
+      (proxy as any).openApiLookup = {
+        "API-update-object": {
+          operationId: "update_object",
+          responses: { "200": { description: "Success" } },
+          method: "patch",
+          path: "/spaces/{space_id}/objects/{object_id}",
+        },
+      };
+
+      const [, callToolHandler] = getHandlers(proxy);
+      const result = await callToolHandler({
+        params: {
+          name: "API-update-object",
+          arguments: {
+            space_id: "space_123",
+            object_id: "obj_456",
+            name: "Updated Name",
+            markdown: "Updated content",
+            icon: null,
+          },
+        },
+      });
+
+      expect(result.content[0].text).toBe(JSON.stringify({ message: "success" }));
+      expect(executeMock).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          space_id: "space_123",
+          object_id: "obj_456",
+          name: "Updated Name",
+          markdown: "Updated content",
+          icon: null,
+        }),
+      );
+    });
+
+    it("should handle HttpClientError and return formatted error with isError: true", async () => {
+      (HttpClient.prototype.executeOperation as ReturnType<typeof vi.fn>).mockRejectedValue(
+        new HttpClientError("Bad Request", 400, { message: "Invalid payload from backend" }),
+      );
+
+      (proxy as any).openApiLookup = {
+        "API-create-object": {
+          operationId: "create_object",
+          responses: { "200": { description: "Success" } },
+          method: "post",
+          path: "/spaces/{space_id}/objects",
+        },
+      };
+
+      const [, callToolHandler] = getHandlers(proxy);
+      const result = await callToolHandler({
+        params: {
+          name: "API-create-object",
+          arguments: {
+            space_id: "space_123",
+            type_key: "page",
+          },
+        },
+      });
+
+      expect(result.isError).toBe(true);
+      const parsed = JSON.parse(result.content[0].text);
+      expect(parsed.status).toBe("error");
+      expect(parsed.message).toBe("Invalid payload from backend");
     });
   });
 

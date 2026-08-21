@@ -1592,4 +1592,33 @@ describe("OpenAPIToMCPConverter - Additional Complex Tests", () => {
     verifyTools(tools, expected.tools);
     expect(openApiLookup).toEqual(expected.openApiLookup);
   });
+
+  describe("ToolOverrides Integration", () => {
+    it("should inject ToolOverrides schema for create_object operation", () => {
+      const specWithCreate: OpenAPIV3.Document = {
+        openapi: "3.0.0",
+        info: { title: "Anytype API", version: "1.0.0" },
+        paths: {
+          "/v1/spaces/{space_id}/objects": {
+            post: {
+              operationId: "create_object",
+              summary: "Create object",
+              responses: { "200": { description: "Success" } },
+            },
+          },
+        },
+      };
+
+      const converter = new OpenAPIToMCPConverter(specWithCreate);
+      const { tools } = converter.convertToMCPTools();
+
+      expect(tools.API).toBeDefined();
+      const method = tools.API.methods.find((m) => m.name === "create-object");
+      expect(method).toBeDefined();
+      expect(method?.inputSchema.properties).toHaveProperty("space_id");
+      expect(method?.inputSchema.properties).toHaveProperty("type_key");
+      expect(method?.inputSchema.properties).toHaveProperty("properties");
+      expect(method?.inputSchema).not.toHaveProperty("$schema");
+    });
+  });
 });
