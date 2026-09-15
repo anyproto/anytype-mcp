@@ -5,6 +5,7 @@ import { Headers } from "node-fetch";
 import OpenAPIClientAxios from "openapi-client-axios";
 import type { OpenAPIV3, OpenAPIV3_1 } from "openapi-types";
 import { isFileUploadParameter } from "../openapi/file-upload";
+import { OpenAPIToMCPConverter } from "../openapi/parser";
 
 export type HttpClientConfig = {
   baseUrl: string;
@@ -32,8 +33,10 @@ export class HttpClientError extends Error {
 export class HttpClient {
   private api: Promise<AxiosInstance>;
   private client: OpenAPIClientAxios;
+  private converter: OpenAPIToMCPConverter;
 
   constructor(config: HttpClientConfig, openApiSpec: OpenAPIV3.Document | OpenAPIV3_1.Document) {
+    this.converter = new OpenAPIToMCPConverter(openApiSpec);
     // @ts-expect-error OpenAPIClientAxios can be imported as default or named export, we handle both cases
     this.client = new (OpenAPIClientAxios.default ?? OpenAPIClientAxios)({
       definition: openApiSpec,
@@ -117,37 +120,34 @@ export class HttpClient {
       throw new Error("Operation ID is required");
     }
 
-    // Handle file uploads if present
-    const formData = await this.prepareFileUpload(operation, params);
-
-    // Separate parameters based on their location
-    const urlParameters: Record<string, any> = {};
-    const bodyParams: Record<string, any> = formData || { ...params };
-
-    // Extract path and query parameters based on operation definition
-    if (operation.parameters) {
-      for (const param of operation.parameters) {
-        if ("name" in param && param.name && param.in) {
-          if (param.in === "path" || param.in === "query") {
-            if (params[param.name] !== undefined) {
-              urlParameters[param.name] = params[param.name];
-              if (!formData) {
-                delete bodyParams[param.name];
-              }
-            }
-          }
+    // OpenAPIClientAxios routes declared parameters to path, query, headers,
+    // and cookies. Remove them before constructing either JSON or multipart bodies.
+    const requestParameters: Record<string, any> = {};
+    const bodyArguments = { ...params };
+    for (const parameter of operation.parameters || []) {
+      const param = this.converter.resolveParameter(parameter);
+      if (param) {
+        if (params[param.name] !== undefined) {
+          requestParameters[param.name] = params[param.name];
         }
+        delete bodyArguments[param.name];
       }
     }
 
-    // Add all parameters as url parameters if there is no requestBody defined
-    if (!operation.requestBody && !formData) {
-      for (const key in bodyParams) {
-        if (bodyParams[key] !== undefined) {
-          urlParameters[key] = bodyParams[key];
-          delete bodyParams[key];
-        }
-      }
+    const formData = await this.prepareFileUpload(operation, bodyArguments);
+    const bodySchema = this.converter.getJsonRequestBodySchema(operation);
+    // Use the same converted schema as the tool generator: a real document
+    // property named "body" must remain wrapped when its object schema is flat.
+    const wrappedBody = bodySchema && !(bodySchema.type === "object" && bodySchema.properties);
+    let bodyParams: any;
+    if (!operation.requestBody) {
+      Object.assign(requestParameters, bodyArguments);
+    } else if (formData) {
+      bodyParams = formData;
+    } else if (wrappedBody) {
+      bodyParams = bodyArguments.body;
+    } else if (Object.keys(bodyArguments).length > 0) {
+      bodyParams = bodyArguments;
     }
 
     const operationFn = (api as any)[operationId];
@@ -157,7 +157,7 @@ export class HttpClient {
 
     try {
       // If we have form data, we need to set the correct headers
-      const hasBody = Object.keys(bodyParams).length > 0;
+      const hasBody = bodyParams !== undefined;
       const headers = formData
         ? formData.getHeaders()
         : { ...(hasBody ? { "Content-Type": "application/json" } : { "Content-Type": null }) };
@@ -167,9 +167,9 @@ export class HttpClient {
         },
       };
 
-      // first argument is url parameters, second is body parameters
-      console.error("calling operation", { operationId, urlParameters, bodyParams, requestConfig });
-      const response = await operationFn(urlParameters, hasBody ? bodyParams : undefined, requestConfig);
+      // First argument is OpenAPI parameters; second is the actual request document.
+      console.error("calling operation", { operationId, requestParameters, bodyParams, requestConfig });
+      const response = await operationFn(requestParameters, bodyParams, requestConfig);
 
       console.error("operation finished");
       // Convert axios headers to Headers object

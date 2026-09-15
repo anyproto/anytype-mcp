@@ -133,6 +133,40 @@ describe("HttpClient File Upload", () => {
     );
   });
 
+  it("keeps path, query, and header parameters out of multipart fields", async () => {
+    const mockFileStream = { pipe: vi.fn() };
+    vi.mocked(fs.createReadStream).mockReturnValue(mockFileStream as any);
+    const operation = {
+      ...mockOpenApiSpec.paths["/upload"]!.post!,
+      method: "post",
+      path: "/upload",
+      parameters: [
+        { name: "space_id", in: "path", required: true, schema: { type: "string" } },
+        { name: "dry_run", in: "query", schema: { type: "boolean" } },
+        { name: "Idempotency-Key", in: "header", schema: { type: "string" } },
+      ],
+    } satisfies OpenAPIV3.OperationObject & { method: string; path: string };
+    mockApiInstance.uploadFile.mockResolvedValue({ data: {}, status: 200, headers: {} });
+
+    await client.executeOperation(operation, {
+      space_id: "space-1",
+      dry_run: false,
+      "Idempotency-Key": "upload-1",
+      file: "/path/to/test.txt",
+      description: "Test file",
+    });
+
+    expect(vi.mocked(FormData.prototype.append).mock.calls).toEqual([
+      ["file", mockFileStream],
+      ["description", "Test file"],
+    ]);
+    expect(mockApiInstance.uploadFile).toHaveBeenCalledWith(
+      { space_id: "space-1", dry_run: false, "Idempotency-Key": "upload-1" },
+      expect.any(FormData),
+      { headers: {} },
+    );
+  });
+
   it("should handle multiple file uploads", async () => {
     const mockFormData = new FormData();
     const mockFileStream1 = { pipe: vi.fn() };

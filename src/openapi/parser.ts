@@ -491,9 +491,7 @@ export class OpenAPIToMCPConverter {
     return !("$ref" in body);
   }
 
-  private resolveParameter(
-    param: OpenAPIV3.ParameterObject | OpenAPIV3.ReferenceObject,
-  ): OpenAPIV3.ParameterObject | null {
+  resolveParameter(param: OpenAPIV3.ParameterObject | OpenAPIV3.ReferenceObject): OpenAPIV3.ParameterObject | null {
     if (this.isParameterObject(param)) {
       return param;
     } else {
@@ -517,6 +515,16 @@ export class OpenAPIToMCPConverter {
       }
     }
     return null;
+  }
+
+  /** The converted JSON body schema used to decide whether MCP inputs are flat or wrapped in `body`. */
+  getJsonRequestBodySchema(operation: OpenAPIV3.OperationObject): IJsonSchema | undefined {
+    if (!operation.requestBody) return undefined;
+    const body = this.resolveRequestBody(operation.requestBody);
+    // MCP tools prefer multipart when both media types are offered.
+    if (body?.content["multipart/form-data"]?.schema) return undefined;
+    const schema = body?.content["application/json"]?.schema;
+    return schema ? this.convertOpenApiSchemaToJsonSchema(schema, new Set(), true) : undefined;
   }
 
   private resolveResponse(
@@ -600,11 +608,7 @@ export class OpenAPIToMCPConverter {
         }
         // Handle application/json
         else if (bodyObj.content["application/json"]?.schema) {
-          const bodySchema = this.convertOpenApiSchemaToJsonSchema(
-            bodyObj.content["application/json"].schema,
-            new Set(),
-            true,
-          );
+          const bodySchema = this.getJsonRequestBodySchema(operation)!;
           // Merge body schema into the inputSchema's properties
           if (bodySchema.type === "object" && bodySchema.properties) {
             for (const [name, propSchema] of Object.entries(bodySchema.properties)) {
@@ -616,7 +620,7 @@ export class OpenAPIToMCPConverter {
               inputSchema.required!.push(...bodySchema.required!.filter((r) => r !== "filters"));
             }
           } else {
-            // If the request body is not an object, just put it under "body"
+            // Open-ended objects and non-object documents are passed intact under "body".
             inputSchema.properties!["body"] = bodySchema;
             inputSchema.required!.push("body");
           }
