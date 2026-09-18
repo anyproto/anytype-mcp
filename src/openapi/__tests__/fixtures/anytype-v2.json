@@ -1,0 +1,5426 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "contact": {
+      "email": "support@anytype.io",
+      "name": "Anytype Support",
+      "url": "https://anytype.io/contact"
+    },
+    "license": {
+      "name": "Any Source Available License 1.0",
+      "url": "https://github.com/anyproto/anytype-api/blob/main/LICENSE.md"
+    },
+    "termsOfService": "https://anytype.io/terms_of_use",
+    "title": "Anytype API v2",
+    "version": "2025-11-08",
+    "description": "Anytype API v2 exposes an object as one editable **AnyBlock JSON document**.\nA single `GET` reads its properties and content; a single `PATCH` applies a\nbatch of edits. It is designed for agents, scripts, and integrations that\nneed to work with whole documents.\n\n> **Pre-release:** API v2 can change without a new API version. Use\n> [API v1](https://developers.anytype.io/docs/reference) for production\n> integrations that need a stable contract.\n\n## Connect and authenticate\n\nThe API runs locally with Anytype, at `http://127.0.0.1:31009` by default.\nBoth API majors share the same process, port, and API keys. v2 routes start\nwith `/v2/` and do not require the `Anytype-Version` request header.\n\nTo obtain a key through Desktop pairing:\n\n1. Send `POST /v2/auth/challenges` with an `app_name`.\n2. The user approves spaces and permissions in Anytype Desktop, then receives\n   a four-digit code.\n3. Send `POST /v2/auth/api_keys` with the `challenge_id` and `code`. The\n   response contains an `api_key` and the approved grant.\n\nThese two pairing endpoints require no existing key. For authenticated\nrequests, send the key in the `Authorization` header:\n\n```bash\ncurl http://127.0.0.1:31009/v2/auth/whoami \\\n  -H \"Authorization: Bearer $api_key\"\n```\n\nSet `api_key` to your key before running the example. The `whoami` response\ndescribes which spaces and permissions it grants.\n\nThe bearer credential is an opaque Anytype API key. It is not a JWT, and it\nis never read from a query or body parameter. An unknown, revoked, or expired\nkey returns `401`.\n\n## Objects, properties, and blocks\n\n- **Spaces** contain objects. Most routes are scoped to one space.\n- **Objects** combine typed `properties` with document content in `blocks`.\n- **Types** describe an object's shape and are addressed by a type key, such\n  as `page` or `task`.\n- **Queries** show a live selection of objects. **Collections** hold a\n  hand-curated list.\n- **Chats** store messages separately from document blocks.\n\nBlocks form a flat array in document order, with `indent` describing the\nhierarchy. Inline text formatting uses Markdown. The title and description\nlive in the `name` and `description` properties.\n\n| Task | Request |\n| --- | --- |\n| Find available spaces | `GET /v2/spaces` |\n| Search within a space | `POST /v2/spaces/{space_id}/search` |\n| Search across spaces | `POST /v2/search` |\n| Read a document | `GET /v2/spaces/{space_id}/objects/{object_id}` |\n| Create an object | `POST /v2/spaces/{space_id}/objects` |\n| Edit a document | `PATCH /v2/spaces/{space_id}/objects/{object_id}` |\n\n## Names and identifiers\n\nNames owned by v2 use `snake_case`: path and query parameters, request and\nresponse fields, and `PATCH` operation names. Content inside an AnyBlock\ndocument retains the format's own field vocabulary.\n\n### Property and type keys\n\nReads use stable keys such as `due_date` by default. A key is minted when\nthe property or type is created and stays the same after a rename. Use keys\nin scripts, configuration, and integrations.\n\nUse `?keys=name` to read display names such as `Due date` instead. This is\nuseful when showing users their own vocabulary.\n\nInputs accept keys, display names, and forgiving spelling variants. For\nexample, `due_date`, `dueDate`, `due-date`, and `Due date` can address the same\nproperty. An ambiguous spelling returns `400` with the candidates. An\nunknown spelling never creates a property implicitly.\n\nSelect options are addressed by their names. Object references remain full\nobject ids and are included inline.\n\n### Block and view ids\n\nDefault object reads shorten machine-minted block ids to document-local\nsuffixes. Use ids exactly as the read returns them when editing. Routes and\noperations that address a block or view accept a full id or a unique suffix;\nan ambiguous suffix is refused with a list of candidates.\n\nUse `?ids=full` for the export shape, with full ids throughout. This is the\nshape to store for a backup or use when cloning a document.\n\nPATCH receipts follow the same choice: `created_blocks` and `created_views`\nuse the labels from the resulting document by default, and full ids with\n`?ids=full`. This also applies to dry runs. Collision handling can leave an\nid full. An id removed by a later operation or omitted from the resulting\ndocument retains its minted spelling in the receipt.\n\n### Space references\n\nA space is normally served with a short reference: the last six characters\nof the first half of its full `<cid>.<replicationKey>` id. Space-scoped routes\naccept either spelling. Resolution tries an exact id first, then a unique\nsuffix among the spaces the key can access.\n\nAn ambiguous reference returns `400` with the candidates. Spaces whose\nsuffixes collide are served with full ids.\n\nA short reference is only unique among the spaces currently visible to the\nkey. Joining another space can make it ambiguous. Use `?ids=full` whenever a\nspace reference will be stored outside the API.\n\n## Read and search efficiently\n\nObject reads return the editable document by default. For a smaller read:\n\n- `?outline=true` returns the block structure with shortened text.\n- `?include=properties` or `?include=blocks` selects part of the object.\n- `?block={block_id}` returns one subtree, marked as a partial document.\n- `?format=md` returns a read-only Markdown rendering.\n\nPartial documents and Markdown renderings cannot be sent back as whole\ndocument writes. Use `PATCH` operations to edit the object.\n\nList and search rows are compact: `id`, `name`, `type`, and the properties\nyou request. They do not embed a type object. Request the fields you need\ninstead of reading every object separately.\n\nLists use `offset` and `limit`, with 25 rows by default. Responses include\n`total` and `has_more`, plus a narrowing hint when truncated. Chat messages\nuse an order-id cursor instead.\n\nSearch accepts full text in the JSON body's `query` field, for example\n`{\"query\":\"meeting notes\"}`. Cross-space search uses the currently loaded\nspaces. Its `total` is a lower bound when results are clipped; use `has_more`\nto continue paging. Warnings indicate when stores are still loading or\nunavailable, so retry later for a complete view.\n\n## Edit with a batch of operations\n\nSend an `ops` array to the object's `PATCH` endpoint. For example, this body\nchanges the title and appends a paragraph:\n\n```json\n{\n  \"ops\": [\n    {\n      \"op\": \"set_properties\",\n      \"set\": { \"name\": \"Meeting notes\" }\n    },\n    {\n      \"op\": \"insert_blocks\",\n      \"markdown\": \"Next step: review the proposal.\"\n    }\n  ]\n}\n```\n\nThe batch is atomic: an invalid operation rejects the whole request.\nDiscover the accepted fields for each operation at\n`GET /v2/schemas/ops/{op}`.\n\n### Concurrency, retries, and dry runs\n\n| Control | Behavior |\n| --- | --- |\n| `ETag` / `If-Match` | Object reads return an `etag` in the body and an `ETag` header. Send it back in `If-Match` to check for concurrent changes. A stale value returns `409` with the current etag. Without the header, the last write wins. |\n| `Idempotency-Key` | Resource mutations replay the stored response when retried with the same key and request. `POST /v2/validate` also accepts a key. Search requests do not. |\n| `?dry_run=true` | Resource mutations validate the request and report the outcome without committing. A dry run returns `200` where the committed create would return `201`. Each operation documents any limits to its dry-run result. |\n\nChats use order ids and `last_state_id` for concurrency, and have no etag.\n\nResource bodies reject unknown fields with `400` and name the offending\nfield. Document bodies are capped at 10 MiB; structured bodies at 1 MiB.\n\nDeleting an object, type, or property archives it in Bin, where the Anytype\napp can restore it. Object deletion is limited by creator provenance; see\nthe [delete operation](https://developers.anytype.io/docs/reference/v2/delete-object)\nfor its requirements. Deleting a chat message, including any attachment\ncleanup that follows, is not an archive.\n\n## Errors and warnings\n\nErrors from v2 handlers have this structure:\n\n```json\n{\n  \"status\": 400,\n  \"code\": \"...\",\n  \"message\": \"...\",\n  \"issues\": [\n    { \"path\": \"...\", \"message\": \"...\", \"hint\": \"...\" }\n  ]\n}\n```\n\nAll four top-level fields are always present. `issues` is an empty array\nwhen there is no path to name. Issues identify the failing input and can\ndescribe the allowed values or how to repair the request.\n\nSome refusals occur before v2 handlers run:\n\n- Pairing, authentication, key-scope checks, request-origin checks, and the\n  shared write rate limit use the older shared error envelope.\n- An unmatched route or an unhandled panic returns no error envelope.\n\nA read does not fail because it encounters content its representation\ncannot express. Such content is reported in `warnings` beside the result.\n\n## Stream chat messages\n\n`GET /v2/spaces/{space_id}/chats/{chat_id}/messages/stream` opens a\nServer-Sent Events connection. It starts with the last `limit` messages as\n`message_added` events, then delivers live changes:\n\n- `message_added`, `message_updated`, and `message_deleted`\n- `reactions_updated`, `state_updated`, and `pinned_updated`\n\nIdle connections stay open with comment lines that clients ignore.\n\nEach addition carries the chat state id as its event id. An id-only frame\nafter the opening window carries the highest such id. Send the last id back\nas `Last-Event-ID` to resume a dropped connection against the same node.\n\n**Only additions replay.** Edits, deletions, pins, and reactions do not\nchange that state id. Re-read messages to refresh changes made while the\nconnection was down.\n\nA `resync_required` event means the retained messages could not establish\ncoverage of the gap since your last event id. Content outside the following\nwindow is unverified. The absence of this event does not guarantee a\ncomplete history: out-of-order additions or reindexing can create gaps the\nstream cannot detect. Re-read messages when you need certainty.\n\n## Download files and icons\n\nUse `GET /v2/spaces/{space_id}/files/{file_id}/content` with a file id or the\n`icon_image` value from a space or member. The response contains bytes with\nthe matching `Content-Type`.\n\nDownloads support byte ranges and conditional requests with `ETag` or\n`Last-Modified`. File preconditions use standard status codes, including\n`304` and `412`. Access is checked on every request.\n\n## Discover schemas at runtime\n\n| Request | Result |\n| --- | --- |\n| `GET /v2/schemas` | Available schema kinds |\n| `GET /v2/schemas/{kind}` | The schema for one kind |\n| `GET /v2/schemas/ops/{op}` | The schema for one edit operation |\n\nThe schemas support strict constrained decoding. Read them before writing\nrequests, and use `POST /v2/validate` to check an AnyBlock document.\n"
+  },
+  "servers": [
+    {
+      "url": "http://127.0.0.1:31009"
+    }
+  ],
+  "paths": {
+    "/v2/auth/whoami": {
+      "get": {
+        "description": "This describes the key, not a person; there is one account behind this API. Branch on `grant.scoped`. False is a legacy key with no space restriction, and its `spaces` list is empty rather than absent. True means the key reaches exactly the spaces listed. When `grant.all_spaces` is true the key covers every space, including ones created later, and `spaces` is informational only.",
+        "operationId": "auth_whoami",
+        "parameters": [
+          {
+            "description": "How grant.spaces[].id is spelled: compact (default) is the short space reference; full is the whole <cid>.<replicationKey> id, and the spelling to store outside this API",
+            "in": "query",
+            "name": "ids",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "Get API key details",
+        "tags": [
+          "Auth"
+        ],
+        "responses": {
+          "200": {
+            "description": "The key's grant, as it is enforced",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired key; shared authentication envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The shared key-scope gate uses the legacy envelope; an operation-specific refusal may use the v2 error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid path, query or request input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/schemas": {
+      "get": {
+        "operationId": "list_schemas",
+        "summary": "List schemas",
+        "tags": [
+          "Schemas"
+        ],
+        "responses": {
+          "200": {
+            "description": "Schema index",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid path, query or request input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired key; shared authentication envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The shared key-scope gate uses the legacy envelope; an operation-specific refusal may use the v2 error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/schemas/ops/{op}": {
+      "get": {
+        "description": "The example is a single op object, ready to drop into an edit request's `ops` array, not a whole request body.",
+        "operationId": "get_op_schema",
+        "parameters": [
+          {
+            "description": "Op name: set_properties, update_block, replace_subtree, insert_blocks, move_block, delete_block, replace_text, set_cell, update_view, insert_view, move_view, delete_view, add_items, remove_items",
+            "in": "path",
+            "name": "op",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "Get an edit operation schema",
+        "tags": [
+          "Schemas"
+        ],
+        "responses": {
+          "200": {
+            "description": "Schema + example",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown op",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid path, query or request input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired key; shared authentication envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The shared key-scope gate uses the legacy envelope; an operation-specific refusal may use the v2 error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/schemas/{kind}": {
+      "get": {
+        "operationId": "get_schema",
+        "parameters": [
+          {
+            "description": "Schema kind, as listed by GET /v2/schemas",
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "Get a schema",
+        "tags": [
+          "Schemas"
+        ],
+        "responses": {
+          "200": {
+            "description": "Schema + example",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown kind",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid path, query or request input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired key; shared authentication envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The shared key-scope gate uses the legacy envelope; an operation-specific refusal may use the v2 error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/search": {
+      "post": {
+        "description": "Type keys and option names resolve per space; unresolved spaces produce warnings. Searches loaded spaces using query as full text over names and indexed content. total is a lower bound when clipped; use has_more to request further pages. Warnings report loading or unavailable stores. Each row carries space_id.",
+        "operationId": "search_global",
+        "parameters": [
+          {
+            "description": "Items to skip",
+            "in": "query",
+            "name": "offset",
+            "schema": {
+              "default": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Items to return",
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "default": 25,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "How each row's space_id is spelled: compact (default) is the short space reference; full is the whole <cid>.<replicationKey> id, and the spelling to store outside this API",
+            "in": "query",
+            "name": "ids",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SearchRequestDoc"
+              }
+            }
+          },
+          "description": "Search request",
+          "required": true
+        },
+        "summary": "Search objects across spaces",
+        "tags": [
+          "Search"
+        ],
+        "responses": {
+          "200": {
+            "description": "Minimal object rows with space_id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired key; shared authentication envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The shared key-scope gate uses the legacy envelope; an operation-specific refusal may use the v2 error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/spaces": {
+      "get": {
+        "description": "Returns only live spaces accessible to this API key. A space that is deleted, left, or still joining does not appear. has_not_granted_spaces is true when other live user spaces are excluded by the key's grant; if a requested space is missing, ask the user to grant access. This flag is independent of pagination: total and has_more describe only accessible spaces.",
+        "operationId": "list_spaces",
+        "parameters": [
+          {
+            "description": "compact (default) is the short space reference; full is the whole <cid>.<replicationKey> id, and the spelling to store outside this API",
+            "in": "query",
+            "name": "ids",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "List spaces",
+        "tags": [
+          "Spaces"
+        ],
+        "responses": {
+          "200": {
+            "description": "Granted space rows and whether other live spaces require access",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid path, query or request input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired key; shared authentication envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The shared key-scope gate uses the legacy envelope; an operation-specific refusal may use the v2 error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "description": "A retry the server already handled makes a second space unless it carries the same idempotency key. A dry run validates the body and stops there; creating a space cannot be simulated.",
+        "operationId": "create_space",
+        "parameters": [
+          {
+            "description": "Validate the body without creating",
+            "in": "query",
+            "name": "dry_run",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "compact (default) is the short space reference; full is the whole <cid>.<replicationKey> id of the new space, and the spelling to store outside this API",
+            "in": "query",
+            "name": "ids",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Replay guard: the same key with the same body replays the stored response",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSpaceRequest"
+              }
+            }
+          },
+          "description": "The space to create",
+          "required": true
+        },
+        "summary": "Create a space",
+        "tags": [
+          "Spaces"
+        ],
+        "responses": {
+          "201": {
+            "description": "Created space",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired key; shared authentication envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The shared key-scope gate uses the legacy envelope; an operation-specific refusal may use the v2 error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Idempotency-Key conflict, or an operation-specific concurrency conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body exceeds this operation's documented cap",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Shared write rate limit; legacy error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Dry run; validation result without committing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/spaces/{space_id}": {
+      "get": {
+        "description": "Only live spaces are served. A space that is deleted, left, or still joining is a 404.",
+        "operationId": "get_space",
+        "parameters": [
+          {
+            "description": "Space id",
+            "in": "path",
+            "name": "space_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "compact (default) is the short space reference; full is the whole <cid>.<replicationKey> id, and the spelling to store outside this API",
+            "in": "query",
+            "name": "ids",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "Get a space",
+        "tags": [
+          "Spaces"
+        ],
+        "responses": {
+          "200": {
+            "description": "The space row",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Space not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid path, query or request input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired key; shared authentication envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The shared key-scope gate uses the legacy envelope; an operation-specific refusal may use the v2 error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "description": "At least one of the two fields must be present; a field left out keeps its current value.",
+        "operationId": "update_space",
+        "parameters": [
+          {
+            "description": "Space id",
+            "in": "path",
+            "name": "space_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Validate and report without committing",
+            "in": "query",
+            "name": "dry_run",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "compact (default) is the short space reference; full is the whole <cid>.<replicationKey> id, and the spelling to store outside this API",
+            "in": "query",
+            "name": "ids",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Replay guard: the same key with the same body replays the stored response",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateSpaceRequest"
+              }
+            }
+          },
+          "description": "The fields to change",
+          "required": true
+        },
+        "summary": "Update a space",
+        "tags": [
+          "Spaces"
+        ],
+        "responses": {
+          "200": {
+            "description": "The updated space row",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The shared key-scope gate uses the legacy envelope; an operation-specific refusal may use the v2 error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Space not found or not live",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired key; shared authentication envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Idempotency-Key conflict, or an operation-specific concurrency conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body exceeds this operation's documented cap",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Shared write rate limit; legacy error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/spaces/{space_id}/chats": {
+      "get": {
+        "description": "A row carries no unread counters. Per-chat unread state comes back with the messages read instead.",
+        "operationId": "list_chats",
+        "parameters": [
+          {
+            "description": "Space id",
+            "in": "path",
+            "name": "space_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Rows to skip",
+            "in": "query",
+            "name": "offset",
+            "schema": {
+              "default": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Rows to return",
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "default": 25,
+              "type": "integer"
+            }
+          }
+        ],
+        "summary": "List chats",
+        "tags": [
+          "Chat"
+        ],
+        "responses": {
+          "200": {
+            "description": "Chat rows",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Space not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid path, query or request input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired key; shared authentication envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The shared key-scope gate uses the legacy envelope; an operation-specific refusal may use the v2 error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "description": "Messages are not blocks. Add them through the messages route; a document edit cannot reach them.",
+        "operationId": "create_chat",
+        "parameters": [
+          {
+            "description": "Space id",
+            "in": "path",
+            "name": "space_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Validate and report without committing",
+            "in": "query",
+            "name": "dry_run",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Replay guard: the same key with the same body replays the stored response",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateChatRequest"
+              }
+            }
+          },
+          "description": "The chat to create",
+          "required": true
+        },
+        "summary": "Create a chat",
+        "tags": [
+          "Chat"
+        ],
+        "responses": {
+          "201": {
+            "description": "Created chat row",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired key; shared authentication envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The shared key-scope gate uses the legacy envelope; an operation-specific refusal may use the v2 error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The space does not exist, or is not available (deleted, left, or still joining)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Idempotency-Key conflict, or an operation-specific concurrency conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body exceeds this operation's documented cap",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Shared write rate limit; legacy error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Dry run; validation result without committing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/spaces/{space_id}/chats/{chat_id}/messages": {
+      "get": {
+        "description": "`after` on its own walks forward, oldest first, continuing from `next_after`. Every other query, including `after` together with `before`, is anchored at the newest end of the range and walks backward from `next_before`. Both bounds are exclusive. `message_count` is the chat's total since it began, not the size of the range. Offset paging does not apply here, and `offset` is refused.",
+        "operationId": "get_chat_messages",
+        "parameters": [
+          {
+            "description": "Space id",
+            "in": "path",
+            "name": "space_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Chat object id",
+            "in": "path",
+            "name": "chat_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Return messages after this order id (exclusive)",
+            "in": "query",
+            "name": "after",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Return messages before this order id (exclusive)",
+            "in": "query",
+            "name": "before",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Messages to return",
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "default": 25,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "counts (default) returns the emoji counts; full adds the participant ids behind each count",
+            "in": "query",
+            "name": "reactions",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "List chat messages",
+        "tags": [
+          "Chat"
+        ],
+        "responses": {
+          "200": {
+            "description": "Messages + state + message_count",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a chat, or invalid params",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Chat not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired key; shared authentication envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The shared key-scope gate uses the legacy envelope; an operation-specific refusal may use the v2 error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "description": "The text is markup source, so `*`, `[` and a mention tag mint real marks; escape a literal one with a backslash. The cap is 8000 UTF-16 code units, where one emoji can cost two or more. Attachments are object ids, at most 32, and each one's kind is taken from the target's layout.",
+        "operationId": "add_chat_message",
+        "parameters": [
+          {
+            "description": "Space id",
+            "in": "path",
+            "name": "space_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Chat object id",
+            "in": "path",
+            "name": "chat_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Validate and report without committing",
+            "in": "query",
+            "name": "dry_run",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Replay guard: the same key with the same body replays the stored response",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddChatMessageRequest"
+              }
+            }
+          },
+          "description": "The message to send",
+          "required": true
+        },
+        "summary": "Send a chat message",
+        "tags": [
+          "Chat"
+        ],
+        "responses": {
+          "201": {
+            "description": "Created message id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Chat not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired key; shared authentication envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The shared key-scope gate uses the legacy envelope; an operation-specific refusal may use the v2 error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Idempotency-Key conflict, or an operation-specific concurrency conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body exceeds this operation's documented cap",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Shared write rate limit; legacy error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Dry run; validation result without committing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/spaces/{space_id}/chats/{chat_id}/messages/stream": {
+      "get": {
+        "description": "Only additions are replayed on resume. A message deleted, edited, or reacted to while you were disconnected keeps its old form in your copy until you read the messages again, because none of those restamp the state id a resume is measured against.",
+        "operationId": "stream_chat_messages",
+        "parameters": [
+          {
+            "description": "Space id",
+            "in": "path",
+            "name": "space_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Chat id",
+            "in": "path",
+            "name": "chat_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Messages in the opening window",
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "default": 25,
+              "maximum": 1000,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Keepalive cadence in seconds",
+            "in": "query",
+            "name": "heartbeat",
+            "schema": {
+              "default": 30,
+              "maximum": 60,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Resume from this chat state id",
+            "in": "header",
+            "name": "Last-Event-ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "Stream chat messages",
+        "tags": [
+          "Chat"
+        ],
+        "responses": {
+          "200": {
+            "description": "Server-Sent Events stream",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Space or chat not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many streams held at once; close one, retrying cannot succeed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid path, query or request input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired key; shared authentication envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The shared key-scope gate uses the legacy envelope; an operation-specific refusal may use the v2 error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/spaces/{space_id}/chats/{chat_id}/messages/{message_id}": {
+      "delete": {
+        "description": "An attachment whose only reference was this message is erased for good afterwards, not moved to Bin. The response names those ids in `warnings`, and a dry run reports the same list without deleting anything. A message that does not exist is a 404 on the dry run too.",
+        "operationId": "delete_chat_message",
+        "parameters": [
+          {
+            "description": "Space id",
+            "in": "path",
+            "name": "space_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Chat object id",
+            "in": "path",
+            "name": "chat_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Message id",
+            "in": "path",
+            "name": "message_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Report what would be deleted, attachments included, without committing",
+            "in": "query",
+            "name": "dry_run",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Replay guard: the same key with the same body replays the stored response",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "Delete a chat message",
+        "tags": [
+          "Chat"
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted message id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Chat or message not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid path, query or request input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired key; shared authentication envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The shared key-scope gate uses the legacy envelope; an operation-specific refusal may use the v2 error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Idempotency-Key conflict, or an operation-specific concurrency conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Shared write rate limit; legacy error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "description": "Every mark is re-derived from the text you send, so a mark the old text carried and the new text does not spell out is lost. Attachments, the reply target and the style survive. Editing another member's message is a 403.",
+        "operationId": "edit_chat_message",
+        "parameters": [
+          {
+            "description": "Space id",
+            "in": "path",
+            "name": "space_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Chat object id",
+            "in": "path",
+            "name": "chat_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Message id",
+            "in": "path",
+            "name": "message_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Validate and report without committing",
+            "in": "query",
+            "name": "dry_run",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Replay guard: the same key with the same body replays the stored response",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EditChatMessageRequest"
+              }
+            }
+          },
+          "description": "The replacement text",
+          "required": true
+        },
+        "summary": "Update chat message text",
+        "tags": [
+          "Chat"
+        ],
+        "responses": {
+          "200": {
+            "description": "Edited message id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Chat or message not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired key; shared authentication envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The shared key-scope gate uses the legacy envelope; an operation-specific refusal may use the v2 error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Idempotency-Key conflict, or an operation-specific concurrency conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body exceeds this operation's documented cap",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Shared write rate limit; legacy error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/spaces/{space_id}/chats/{chat_id}/messages/{message_id}/reactions": {
+      "post": {
+        "description": "`added` says which way the toggle went. A dry run predicts it, but when there is no account identity to predict with it omits the field and says so in `warnings`.",
+        "operationId": "toggle_chat_reaction",
+        "parameters": [
+          {
+            "description": "Space id",
+            "in": "path",
+            "name": "space_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Chat object id",
+            "in": "path",
+            "name": "chat_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Message id",
+            "in": "path",
+            "name": "message_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Report the would-be outcome without committing",
+            "in": "query",
+            "name": "dry_run",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Replay guard: the same key with the same body replays the stored response",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatReactionRequest"
+              }
+            }
+          },
+          "description": "The emoji to toggle",
+          "required": true
+        },
+        "summary": "Toggle a chat reaction",
+        "tags": [
+          "Chat"
+        ],
+        "responses": {
+          "200": {
+            "description": "Toggle outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Chat or message not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired key; shared authentication envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The shared key-scope gate uses the legacy envelope; an operation-specific refusal may use the v2 error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Idempotency-Key conflict, or an operation-specific concurrency conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body exceeds this operation's documented cap",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Shared write rate limit; legacy error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/spaces/{space_id}/chats/{chat_id}/read": {
+      "post": {
+        "description": "`up_to` is inclusive, and it and `last_state_id` both come from one messages read: the newest message's order, and the state's own id. An empty value for either would silently mark nothing, so it is refused. Messages that arrived after that state stay unread. The reactions scope marks every unread reaction and takes neither field.",
+        "operationId": "read_chat",
+        "parameters": [
+          {
+            "description": "Space id",
+            "in": "path",
+            "name": "space_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Chat object id",
+            "in": "path",
+            "name": "chat_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Validate and report without committing",
+            "in": "query",
+            "name": "dry_run",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Replay guard: the same key with the same body replays the stored response",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatReadRequest"
+              }
+            }
+          },
+          "description": "The watermark move",
+          "required": true
+        },
+        "summary": "Mark chat activity as read",
+        "tags": [
+          "Chat"
+        ],
+        "responses": {
+          "200": {
+            "description": "Watermark moved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Chat not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired key; shared authentication envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The shared key-scope gate uses the legacy envelope; an operation-specific refusal may use the v2 error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Idempotency-Key conflict, or an operation-specific concurrency conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body exceeds this operation's documented cap",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Shared write rate limit; legacy error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/spaces/{space_id}/collections": {
+      "post": {
+        "description": "Item ids are checked against the space; an id that does not resolve there is refused rather than dropped.",
+        "operationId": "create_collection",
+        "parameters": [
+          {
+            "description": "Space id",
+            "in": "path",
+            "name": "space_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Validate and report without committing",
+            "in": "query",
+            "name": "dry_run",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Create select options for names the property does not hold yet (default false: an unmatched name is refused)",
+            "in": "query",
+            "name": "create_missing_options",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "summary": "Create a collection",
+        "tags": [
+          "Lists"
+        ],
+        "responses": {
+          "201": {
+            "description": "Created collection id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation or reference failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body exceeds this operation's documented cap",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired key; shared authentication envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The shared key-scope gate uses the legacy envelope; an operation-specific refusal may use the v2 error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The space does not exist, or is not available (deleted, left, or still joining)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Idempotency-Key conflict, or an operation-specific concurrency conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Shared write rate limit; legacy error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Dry run; validation result without committing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/spaces/{space_id}/collections/{collection_id}/objects": {
+      "get": {
+        "description": "Members come back in the order the collection stores them, not sorted, unless a view is applied.",
+        "operationId": "get_collection_objects",
+        "parameters": [
+          {
+            "description": "Space id",
+            "in": "path",
+            "name": "space_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Collection object id",
+            "in": "path",
+            "name": "collection_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Stored view id (exact or unique suffix)",
+            "in": "query",
+            "name": "view",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Comma-separated property keys to include per row",
+            "in": "query",
+            "name": "fields",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Items to skip",
+            "in": "query",
+            "name": "offset",
+            "schema": {
+              "default": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Items to return",
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "default": 25,
+              "type": "integer"
+            }
+          }
+        ],
+        "summary": "List collection objects",
+        "tags": [
+          "Lists"
+        ],
+        "responses": {
+          "200": {
+            "description": "Minimal object rows",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Wrong-layout target or invalid params",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Space, collection or view not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired key; shared authentication envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The shared key-scope gate uses the legacy envelope; an operation-specific refusal may use the v2 error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/spaces/{space_id}/collections/{collection_id}/views": {
+      "get": {
+        "operationId": "get_collection_views",
+        "parameters": [
+          {
+            "description": "Space id",
+            "in": "path",
+            "name": "space_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Collection object id",
+            "in": "path",
+            "name": "collection_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Items to skip",
+            "in": "query",
+            "name": "offset",
+            "schema": {
+              "default": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Items to return",
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "default": 25,
+              "type": "integer"
+            }
+          }
+        ],
+        "summary": "List collection views",
+        "tags": [
+          "Lists"
+        ],
+        "responses": {
+          "200": {
+            "description": "The stored views, with their sorts, filters and columns",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Wrong-layout target",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Space or collection not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired key; shared authentication envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The shared key-scope gate uses the legacy envelope; an operation-specific refusal may use the v2 error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/spaces/{space_id}/files": {
+      "post": {
+        "description": "Send multipart/form-data with a `file` field, or JSON {\"url\": …}. A source that refuses the fetch, or a URL that cannot be fetched, is a 400 naming /url; only a genuine server fault answers 500. The id that comes back is the one file blocks, image blocks and icon_image values reference.",
+        "operationId": "upload_file",
+        "parameters": [
+          {
+            "description": "Space id",
+            "in": "path",
+            "name": "space_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Validate and report without committing",
+            "in": "query",
+            "name": "dry_run",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "maxLength": 4096,
+                    "description": "names the stored object; omit to keep the name the source gives"
+                  },
+                  "url": {
+                    "type": "string",
+                    "maxLength": 4096
+                  }
+                },
+                "required": [
+                  "url"
+                ],
+                "type": "object"
+              }
+            },
+            "multipart/form-data": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "file": {
+                    "format": "binary",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "file"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "summary": "Upload a file",
+        "tags": [
+          "Files"
+        ],
+        "responses": {
+          "201": {
+            "description": "Created file object id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failure, or a source URL that did not yield the file",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body exceeds this operation's documented cap",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired key; shared authentication envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The shared key-scope gate uses the legacy envelope; an operation-specific refusal may use the v2 error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The space does not exist, or is not available (deleted, left, or still joining)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Idempotency-Key conflict, or an operation-specific concurrency conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Shared write rate limit; legacy error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Dry run; validation result without committing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/spaces/{space_id}/files/{file_id}/content": {
+      "get": {
+        "description": "Returns a file or icon from this space. Pass a file id or the icon_image value from a space or member. Images support width variants. Range and conditional requests are supported.",
+        "operationId": "download_file",
+        "parameters": [
+          {
+            "description": "Space id",
+            "in": "path",
+            "name": "space_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "File or icon id",
+            "in": "path",
+            "name": "file_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Image variant width; zero selects the original",
+            "in": "query",
+            "name": "width",
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Byte range",
+            "in": "header",
+            "name": "Range",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Previously received ETag",
+            "in": "header",
+            "name": "If-None-Match",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "ETag or modification date for a range request",
+            "in": "header",
+            "name": "If-Range",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "Get file content",
+        "tags": [
+          "Files"
+        ],
+        "responses": {
+          "200": {
+            "description": "File contents; Content-Type matches the stored media type",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "206": {
+            "description": "Requested byte range",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Not modified; no response body"
+          },
+          "404": {
+            "description": "File or icon not found in this space",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Request precondition failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "416": {
+            "description": "Invalid or unsatisfiable byte range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "File content could not be read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid path, query or request input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired key; shared authentication envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The shared key-scope gate uses the legacy envelope; an operation-specific refusal may use the v2 error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/spaces/{space_id}/members": {
+      "get": {
+        "operationId": "list_members",
+        "parameters": [
+          {
+            "description": "Space id",
+            "in": "path",
+            "name": "space_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "List members",
+        "tags": [
+          "Members"
+        ],
+        "responses": {
+          "200": {
+            "description": "Minimal member rows",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Space not found or unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid path, query or request input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired key; shared authentication envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The shared key-scope gate uses the legacy envelope; an operation-specific refusal may use the v2 error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/spaces/{space_id}/members/me": {
+      "get": {
+        "description": "The identity is taken from the account this API runs against; there is no member id to send.",
+        "operationId": "get_member_me",
+        "parameters": [
+          {
+            "description": "Space id",
+            "in": "path",
+            "name": "space_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "Get the current member",
+        "tags": [
+          "Members"
+        ],
+        "responses": {
+          "200": {
+            "description": "The caller's member row",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Space not found, or no account identity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid path, query or request input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired key; shared authentication envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The shared key-scope gate uses the legacy envelope; an operation-specific refusal may use the v2 error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/spaces/{space_id}/objects": {
+      "get": {
+        "operationId": "list_objects",
+        "parameters": [
+          {
+            "description": "Space id",
+            "in": "path",
+            "name": "space_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Comma-separated property keys to include per row",
+            "in": "query",
+            "name": "fields",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Items to skip",
+            "in": "query",
+            "name": "offset",
+            "schema": {
+              "default": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Items to return",
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "default": 25,
+              "type": "integer"
+            }
+          }
+        ],
+        "summary": "List objects",
+        "tags": [
+          "Objects"
+        ],
+        "responses": {
+          "200": {
+            "description": "Minimal object rows",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid fields query",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Space not found or unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired key; shared authentication envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The shared key-scope gate uses the legacy envelope; an operation-specific refusal may use the v2 error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "description": "A select value naming an option the property does not hold is refused unless `create_missing_options=true` is set. An unknown type or property key is rejected either way, with the closest matches named. The body is either a full AnyBlock document or the shortcut {type, name, properties, markdown}; `formatVersion` or `blocks` picks the document form.",
+        "operationId": "create_object",
+        "parameters": [
+          {
+            "description": "Space id",
+            "in": "path",
+            "name": "space_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Validate and report without committing",
+            "in": "query",
+            "name": "dry_run",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Create select options for names the property does not hold yet (default false: an unmatched name is refused)",
+            "in": "query",
+            "name": "create_missing_options",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "summary": "Create an object",
+        "tags": [
+          "Objects"
+        ],
+        "responses": {
+          "201": {
+            "description": "Created object id + etag",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation or reference failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired key; shared authentication envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The shared key-scope gate uses the legacy envelope; an operation-specific refusal may use the v2 error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The space does not exist, or is not available (deleted, left, or still joining)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Idempotency-Key conflict, or an operation-specific concurrency conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Shared write rate limit; legacy error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Dry run; validation result without committing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/spaces/{space_id}/objects/{object_id}": {
+      "delete": {
+        "description": "Only objects this key created can be deleted. The creator is recorded at creation time and never added later, so objects made in the app, imported, made by another member, or made before this route shipped are refused for good. System objects are a 403 as well. A dry run reports the verdict without the checks that run at archive time, so a deletable verdict can still meet a 403.",
+        "operationId": "delete_object",
+        "parameters": [
+          {
+            "description": "Space id",
+            "in": "path",
+            "name": "space_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Object id",
+            "in": "path",
+            "name": "object_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Probe deletability without writing",
+            "in": "query",
+            "name": "dry_run",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "summary": "Delete an object",
+        "tags": [
+          "Objects"
+        ],
+        "responses": {
+          "200": {
+            "description": "Archived object, or the dry-run verdict. Deleting again is a 200 carrying a warning.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A type or a property: use their own delete routes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The shared key-scope gate uses the legacy envelope; an operation-specific refusal may use the v2 error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Object or space not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired key; shared authentication envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Idempotency-Key conflict, or an operation-specific concurrency conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Shared write rate limit; legacy error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "description": "A `block` subtree comes back flagged as a subtree, and no write path accepts that partial body. `format=md` is read-only; markdown cannot be sent back.",
+        "operationId": "get_object",
+        "parameters": [
+          {
+            "description": "Space id",
+            "in": "path",
+            "name": "space_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Object id",
+            "in": "path",
+            "name": "object_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Subset of properties,blocks (default both)",
+            "in": "query",
+            "name": "include",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Return the outline instead of full blocks: every block's indent/id/type plus its text truncated to 80 runes",
+            "in": "query",
+            "name": "outline",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Return only this block's subtree",
+            "in": "query",
+            "name": "block",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "compact (default) is the edit shape, where minted block ids relabel to short suffixes; full is the export shape, with full ids everywhere, and the shape to send back. Object references are full and inline in both.",
+            "in": "query",
+            "name": "ids",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "anyblock (default) or md",
+            "in": "query",
+            "name": "format",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "Get an object",
+        "tags": [
+          "Objects"
+        ],
+        "responses": {
+          "200": {
+            "description": "The flat AnyBlock document + etag",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Illegal parameter combination (ambiguous_input)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Object or space not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired key; shared authentication envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The shared key-scope gate uses the legacy envelope; an operation-specific refusal may use the v2 error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "description": "Applies ops in order as one atomic edit. A failed op or invalid result leaves the object unchanged. Text locators must match exactly one block. New block and view IDs are returned by payload position in `created_blocks` and `created_views`, compact by default or full with `ids=full`.",
+        "operationId": "patch_object",
+        "parameters": [
+          {
+            "description": "Space id",
+            "in": "path",
+            "name": "space_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Object id",
+            "in": "path",
+            "name": "object_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The etag the object must still carry",
+            "in": "header",
+            "name": "If-Match",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Validate and report without committing",
+            "in": "query",
+            "name": "dry_run",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "ID spelling in created_blocks and created_views",
+            "in": "query",
+            "name": "ids",
+            "schema": {
+              "default": "compact",
+              "enum": [
+                "compact",
+                "full"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "summary": "Update an object",
+        "tags": [
+          "Objects"
+        ],
+        "responses": {
+          "200": {
+            "description": "New etag + created block ids + diff_stats",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid ops or post-op document",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Object, space, or referenced block not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Idempotency-Key conflict, or an operation-specific concurrency conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Existing content cannot be represented losslessly for this edit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired key; shared authentication envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The shared key-scope gate uses the legacy envelope; an operation-specific refusal may use the v2 error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Shared write rate limit; legacy error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/spaces/{space_id}/properties": {
+      "get": {
+        "operationId": "list_properties",
+        "parameters": [
+          {
+            "description": "Space id",
+            "in": "path",
+            "name": "space_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "List properties",
+        "tags": [
+          "Properties"
+        ],
+        "responses": {
+          "200": {
+            "description": "Property rows",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Space not found or unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid path, query or request input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired key; shared authentication envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The shared key-scope gate uses the legacy envelope; an operation-specific refusal may use the v2 error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "create_property",
+        "parameters": [
+          {
+            "description": "Space id",
+            "in": "path",
+            "name": "space_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Validate and report without committing",
+            "in": "query",
+            "name": "dry_run",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "summary": "Create a property",
+        "tags": [
+          "Properties"
+        ],
+        "responses": {
+          "201": {
+            "description": "Created property id + key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body exceeds this operation's documented cap",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired key; shared authentication envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The shared key-scope gate uses the legacy envelope; an operation-specific refusal may use the v2 error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The space does not exist, or is not available (deleted, left, or still joining)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Idempotency-Key conflict, or an operation-specific concurrency conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Shared write rate limit; legacy error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Dry run; validation result without committing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/spaces/{space_id}/properties/{key}": {
+      "delete": {
+        "operationId": "delete_property",
+        "parameters": [
+          {
+            "description": "Space id",
+            "in": "path",
+            "name": "space_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Property key",
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "Delete a property",
+        "tags": [
+          "Properties"
+        ],
+        "responses": {
+          "200": {
+            "description": "Archived property",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No live property with this key. A property that is already deleted is a 404 too, not a second delete.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid path, query or request input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired key; shared authentication envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The shared key-scope gate uses the legacy envelope; an operation-specific refusal may use the v2 error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Idempotency-Key conflict, or an operation-specific concurrency conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Shared write rate limit; legacy error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "description": "Only the display name can change. The key is the property's identity, and its format is fixed once it exists.",
+        "operationId": "update_property",
+        "parameters": [
+          {
+            "description": "Space id",
+            "in": "path",
+            "name": "space_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Property key",
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "summary": "Update a property",
+        "tags": [
+          "Properties"
+        ],
+        "responses": {
+          "200": {
+            "description": "Updated property",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Property not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body exceeds this operation's documented cap",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired key; shared authentication envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The shared key-scope gate uses the legacy envelope; an operation-specific refusal may use the v2 error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Idempotency-Key conflict, or an operation-specific concurrency conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Shared write rate limit; legacy error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/spaces/{space_id}/properties/{key}/options": {
+      "get": {
+        "operationId": "list_property_options",
+        "parameters": [
+          {
+            "description": "Space id",
+            "in": "path",
+            "name": "space_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Property key",
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Case-insensitive name prefix filter",
+            "in": "query",
+            "name": "prefix",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "List property options",
+        "tags": [
+          "Properties"
+        ],
+        "responses": {
+          "200": {
+            "description": "Option rows",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Property not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid path, query or request input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired key; shared authentication envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The shared key-scope gate uses the legacy envelope; an operation-specific refusal may use the v2 error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/spaces/{space_id}/queries": {
+      "post": {
+        "description": "Filter and sort property keys are checked against the type the query runs over; a key that type does not carry is refused.",
+        "operationId": "create_query",
+        "parameters": [
+          {
+            "description": "Space id",
+            "in": "path",
+            "name": "space_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Validate and report without committing",
+            "in": "query",
+            "name": "dry_run",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Create select options for names the property does not hold yet (default false: an unmatched name is refused)",
+            "in": "query",
+            "name": "create_missing_options",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "summary": "Create a query",
+        "tags": [
+          "Lists"
+        ],
+        "responses": {
+          "201": {
+            "description": "Created query id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation or reference failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body exceeds this operation's documented cap",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired key; shared authentication envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The shared key-scope gate uses the legacy envelope; an operation-specific refusal may use the v2 error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The space does not exist, or is not available (deleted, left, or still joining)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Idempotency-Key conflict, or an operation-specific concurrency conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Shared write rate limit; legacy error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Dry run; validation result without committing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/spaces/{space_id}/queries/{query_id}/objects": {
+      "get": {
+        "description": "A stored view's dynamic placeholders, such as the current date or the calling member, are resolved here. One that cannot be resolved becomes a warning rather than a silently empty result.",
+        "operationId": "get_query_objects",
+        "parameters": [
+          {
+            "description": "Space id",
+            "in": "path",
+            "name": "space_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Query object id",
+            "in": "path",
+            "name": "query_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Stored view id (exact or unique suffix)",
+            "in": "query",
+            "name": "view",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Comma-separated property keys to include per row",
+            "in": "query",
+            "name": "fields",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Items to skip",
+            "in": "query",
+            "name": "offset",
+            "schema": {
+              "default": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Items to return",
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "default": 25,
+              "type": "integer"
+            }
+          }
+        ],
+        "summary": "List query results",
+        "tags": [
+          "Lists"
+        ],
+        "responses": {
+          "200": {
+            "description": "Minimal object rows",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Wrong-layout target or invalid params",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Space, query or view not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired key; shared authentication envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The shared key-scope gate uses the legacy envelope; an operation-specific refusal may use the v2 error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/spaces/{space_id}/queries/{query_id}/views": {
+      "get": {
+        "operationId": "get_query_views",
+        "parameters": [
+          {
+            "description": "Space id",
+            "in": "path",
+            "name": "space_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Query object id",
+            "in": "path",
+            "name": "query_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Items to skip",
+            "in": "query",
+            "name": "offset",
+            "schema": {
+              "default": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Items to return",
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "default": 25,
+              "type": "integer"
+            }
+          }
+        ],
+        "summary": "List query views",
+        "tags": [
+          "Lists"
+        ],
+        "responses": {
+          "200": {
+            "description": "The stored views, with their sorts, filters and columns",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Wrong-layout target",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Space or query not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired key; shared authentication envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The shared key-scope gate uses the legacy envelope; an operation-specific refusal may use the v2 error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/spaces/{space_id}/search": {
+      "post": {
+        "description": "`filter` and `filters` are two spellings of the same thing, the compact string and the structured array; sending both is refused. This is a read carried by POST because the query needs a body, so pagination stays in the query string and a `limit` or `offset` in the body is refused.",
+        "operationId": "search_space",
+        "parameters": [
+          {
+            "description": "Space id",
+            "in": "path",
+            "name": "space_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Items to skip",
+            "in": "query",
+            "name": "offset",
+            "schema": {
+              "default": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Items to return",
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "default": 25,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SearchRequestDoc"
+              }
+            }
+          },
+          "description": "Search request",
+          "required": true
+        },
+        "summary": "Search objects in a space",
+        "tags": [
+          "Search"
+        ],
+        "responses": {
+          "200": {
+            "description": "Minimal object rows",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request (validation_failed / ambiguous_input)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Space not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired key; shared authentication envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The shared key-scope gate uses the legacy envelope; an operation-specific refusal may use the v2 error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/spaces/{space_id}/templates": {
+      "post": {
+        "description": "`template_for` names the type key this template starts an object of.",
+        "operationId": "create_template",
+        "parameters": [
+          {
+            "description": "Space id",
+            "in": "path",
+            "name": "space_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Validate and report without committing",
+            "in": "query",
+            "name": "dry_run",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Create select options for names the property does not hold yet (default false: an unmatched name is refused)",
+            "in": "query",
+            "name": "create_missing_options",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "summary": "Create a template",
+        "tags": [
+          "Templates"
+        ],
+        "responses": {
+          "201": {
+            "description": "Created template id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation or reference failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired key; shared authentication envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The shared key-scope gate uses the legacy envelope; an operation-specific refusal may use the v2 error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The space does not exist, or is not available (deleted, left, or still joining)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Idempotency-Key conflict, or an operation-specific concurrency conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Shared write rate limit; legacy error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Dry run; validation result without committing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/spaces/{space_id}/types": {
+      "get": {
+        "operationId": "list_types",
+        "parameters": [
+          {
+            "description": "Space id",
+            "in": "path",
+            "name": "space_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "List types",
+        "tags": [
+          "Types"
+        ],
+        "responses": {
+          "200": {
+            "description": "Type rows",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Space not found or unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid path, query or request input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired key; shared authentication envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The shared key-scope gate uses the legacy envelope; an operation-specific refusal may use the v2 error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "description": "A `type_settings.property_definitions` entry naming a property that does not exist creates it alongside the type. The body is an AnyBlock document with kind \"object_type\"; the type's api key, layout and plural name live in `type_settings`.",
+        "operationId": "create_type",
+        "parameters": [
+          {
+            "description": "Space id",
+            "in": "path",
+            "name": "space_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Validate and report without committing",
+            "in": "query",
+            "name": "dry_run",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Create select options for names the property does not hold yet (default false: an unmatched name is refused)",
+            "in": "query",
+            "name": "create_missing_options",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "summary": "Create a type",
+        "tags": [
+          "Types"
+        ],
+        "responses": {
+          "201": {
+            "description": "Created type id + key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired key; shared authentication envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The shared key-scope gate uses the legacy envelope; an operation-specific refusal may use the v2 error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The space does not exist, or is not available (deleted, left, or still joining)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Idempotency-Key conflict, or an operation-specific concurrency conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Shared write rate limit; legacy error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Dry run; validation result without committing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/spaces/{space_id}/types/{type}": {
+      "delete": {
+        "operationId": "delete_type",
+        "parameters": [
+          {
+            "description": "Space id",
+            "in": "path",
+            "name": "space_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Type key",
+            "in": "path",
+            "name": "type",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "Delete a type",
+        "tags": [
+          "Types"
+        ],
+        "responses": {
+          "200": {
+            "description": "Archived type",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No live type with this key. A type that is already deleted is a 404 too, not a second delete.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid path, query or request input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired key; shared authentication envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The shared key-scope gate uses the legacy envelope; an operation-specific refusal may use the v2 error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Idempotency-Key conflict, or an operation-specific concurrency conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Shared write rate limit; legacy error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "operationId": "get_type",
+        "parameters": [
+          {
+            "description": "Space id",
+            "in": "path",
+            "name": "space_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Type key",
+            "in": "path",
+            "name": "type",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "compact (default) is the edit shape, with short labels for minted view and block ids; full is the export shape, with full ids",
+            "in": "query",
+            "name": "ids",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "Get a type",
+        "tags": [
+          "Types"
+        ],
+        "responses": {
+          "200": {
+            "description": "The kind:objectType AnyBlock document + etag",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Type not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid path, query or request input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired key; shared authentication envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The shared key-scope gate uses the legacy envelope; an operation-specific refusal may use the v2 error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "description": "`type_settings.property_definitions`, when present, replaces the recommended property lists rather than adding to them, and creates any property that does not exist yet. `properties` takes name and description; the layout is `type_settings.layout` and the icon is the typed envelope `icon`. Any other key is refused.",
+        "operationId": "update_type",
+        "parameters": [
+          {
+            "description": "Space id",
+            "in": "path",
+            "name": "space_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Type key",
+            "in": "path",
+            "name": "type",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "summary": "Update a type",
+        "tags": [
+          "Types"
+        ],
+        "responses": {
+          "200": {
+            "description": "Updated type",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Type not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid path, query or request input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired key; shared authentication envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The shared key-scope gate uses the legacy envelope; an operation-specific refusal may use the v2 error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Idempotency-Key conflict, or an operation-specific concurrency conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body exceeds this operation's documented cap",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Shared write rate limit; legacy error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/spaces/{space_id}/types/{type}/schema": {
+      "get": {
+        "description": "Not implemented. Every request that resolves a space answers 501.",
+        "operationId": "get_type_schema",
+        "parameters": [
+          {
+            "description": "Space id",
+            "in": "path",
+            "name": "space_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Type key",
+            "in": "path",
+            "name": "type",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "Get a type schema",
+        "tags": [
+          "Types"
+        ],
+        "responses": {
+          "404": {
+            "description": "Space not found or unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "Not implemented yet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid path, query or request input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired key; shared authentication envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The shared key-scope gate uses the legacy envelope; an operation-specific refusal may use the v2 error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/validate": {
+      "post": {
+        "description": "Structure and format rules only. Nothing is resolved against a space, so option names and a type's property keys are not checked here. Findings come back as data: an invalid document is still a 200, carrying the issues, and a valid one carries empty lists.",
+        "operationId": "validate",
+        "parameters": [
+          {
+            "description": "Retry key; identical requests replay, different requests conflict",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "summary": "Validate an AnyBlock document",
+        "tags": [
+          "Schemas"
+        ],
+        "responses": {
+          "200": {
+            "description": "Issue and warning lists, empty when the document is valid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, unknown, revoked or expired key; shared authentication envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Idempotency-Key conflict, or an operation-specific concurrency conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid path, query or request input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The shared key-scope gate uses the legacy envelope; an operation-specific refusal may use the v2 error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/auth/challenges": {
+      "post": {
+        "description": "Starts pairing for the named app and returns a challenge_id. The user chooses spaces and permissions in Anytype Desktop, then approves to reveal a 4-digit code. Submit the challenge_id and code to /v2/auth/api_keys. No existing API key is required.",
+        "operationId": "create_auth_challenge",
+        "parameters": [
+          {
+            "description": "The version of the API to use",
+            "in": "header",
+            "name": "Anytype-Version",
+            "required": true,
+            "schema": {
+              "default": "2025-11-08",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateChallengeRequest"
+              }
+            }
+          },
+          "description": "The request body containing the app name",
+          "required": true
+        },
+        "summary": "Create a challenge",
+        "tags": [
+          "Auth"
+        ],
+        "responses": {
+          "201": {
+            "description": "The challenge ID associated with the started challenge",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Untrusted request origin or host",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/auth/api_keys": {
+      "post": {
+        "description": "Exchanges a challenge_id from /v2/auth/challenges and the code revealed after Desktop approval for an api_key and the grant approved by the user. The grant states the permission, full space_ids, and whether all current and future user spaces are covered. Use the key as a bearer credential in the Authorization header. No existing API key is required.",
+        "operationId": "create_api_key",
+        "parameters": [
+          {
+            "description": "The version of the API to use",
+            "in": "header",
+            "name": "Anytype-Version",
+            "required": true,
+            "schema": {
+              "default": "2025-11-08",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateApiKeyRequest"
+              }
+            }
+          },
+          "description": "The request body containing the challenge ID and code",
+          "required": true
+        },
+        "summary": "Create an API key",
+        "tags": [
+          "Auth"
+        ],
+        "responses": {
+          "201": {
+            "description": "The API key and its approved grant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Untrusted request origin or host",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AddChatMessageRequest": {
+        "properties": {
+          "attachments": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "uniqueItems": false
+          },
+          "reply_to": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ChatReactionRequest": {
+        "properties": {
+          "emoji": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ChatReadRequest": {
+        "properties": {
+          "last_state_id": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "up_to": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "CreateApiKeyRequest": {
+        "properties": {
+          "challenge_id": {
+            "description": "The challenge id associated with the previously displayed code",
+            "example": "67647f5ecda913e9a2e11b26",
+            "type": "string"
+          },
+          "code": {
+            "description": "The 4-digit code retrieved from Anytype Desktop app",
+            "example": "1234",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "CreateChallengeRequest": {
+        "properties": {
+          "app_name": {
+            "description": "The name of the app that is requesting the challenge",
+            "example": "anytype_mcp",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "CreateChatRequest": {
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "CreateSpaceRequest": {
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "EditChatMessageRequest": {
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "SearchRequestDoc": {
+        "properties": {
+          "fields": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "uniqueItems": false
+          },
+          "filter": {
+            "type": "string"
+          },
+          "filters": {
+            "items": {
+              "additionalProperties": {},
+              "type": "object"
+            },
+            "type": "array",
+            "uniqueItems": false
+          },
+          "query": {
+            "description": "Full-text query over object names and indexed content.",
+            "type": "string"
+          },
+          "sorts": {
+            "items": {
+              "additionalProperties": {},
+              "type": "object"
+            },
+            "type": "array",
+            "uniqueItems": false
+          },
+          "type": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "UpdateSpaceRequest": {
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    }
+  }
+}

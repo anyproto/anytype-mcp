@@ -2,11 +2,11 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { CallToolRequestSchema, ListToolsRequestSchema, Tool } from "@modelcontextprotocol/sdk/types.js";
 import { JSONSchema7 as IJsonSchema } from "json-schema";
-import { Headers } from "node-fetch";
 import { OpenAPIV3 } from "openapi-types";
 import { HttpClient, HttpClientError } from "../client/http-client";
 import { OpenAPIToMCPConverter } from "../openapi/parser";
 import { determineBaseUrl } from "../utils/base-url";
+import { compactWriteResponse } from "./write-response";
 
 type PathItemObject = OpenAPIV3.PathItemObject & {
   get?: OpenAPIV3.OperationObject;
@@ -33,6 +33,11 @@ export class MCPProxy {
 
   constructor(name: string, openApiSpec: OpenAPIV3.Document) {
     this.server = new Server({ name, version: "1.0.0" }, { capabilities: { tools: {} } });
+    // Validate the advertised surface before initializing an HTTP client.
+    const converter = new OpenAPIToMCPConverter(openApiSpec);
+    const { tools, openApiLookup } = converter.convertToMCPTools();
+    this.tools = tools;
+    this.openApiLookup = openApiLookup;
     const baseUrl = determineBaseUrl(openApiSpec);
     this.httpClient = new HttpClient(
       {
@@ -41,12 +46,6 @@ export class MCPProxy {
       },
       openApiSpec,
     );
-
-    // Convert OpenAPI spec to MCP tools
-    const converter = new OpenAPIToMCPConverter(openApiSpec);
-    const { tools, openApiLookup } = converter.convertToMCPTools();
-    this.tools = tools;
-    this.openApiLookup = openApiLookup;
 
     this.setupHandlers();
   }
@@ -60,9 +59,8 @@ export class MCPProxy {
       Object.entries(this.tools).forEach(([toolName, def]) => {
         def.methods.forEach((method) => {
           const toolNameWithMethod = `${toolName}-${method.name}`;
-          const truncatedToolName = this.truncateToolName(toolNameWithMethod);
           tools.push({
-            name: truncatedToolName,
+            name: toolNameWithMethod,
             description: method.description,
             inputSchema: method.inputSchema as Tool["inputSchema"],
           });
@@ -73,48 +71,67 @@ export class MCPProxy {
     });
 
     // Handle tool calling
-    this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
-      console.error("calling tool", request.params);
+    this.server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
       const { name, arguments: params } = request.params;
 
       // Find the operation in OpenAPI spec
       const operation = this.findOperation(name);
-      console.error("operations", this.openApiLookup);
       if (!operation) {
         throw new Error(`Method ${name} not found`);
       }
 
       try {
         // Execute the operation
-        const response = await this.httpClient.executeOperation(operation, params);
+        const response = await this.httpClient.executeOperation(
+          operation,
+          params,
+          ...(extra?.signal ? [{ signal: extra.signal }] : []),
+        );
 
-        // Convert response to MCP format
+        const metadata = {
+          ...(response.headers.get("etag") ? { etag: response.headers.get("etag") } : {}),
+          ...(response.requestKey ? { request_key: response.requestKey } : {}),
+        };
         return {
           content: [
             {
-              type: "text", // currently this is the only type that seems to be used by mcp server
-              text: JSON.stringify(response.data), // TODO: pass through the http status code text?
+              type: "text",
+              text: JSON.stringify(compactWriteResponse(operation, response.data)),
             },
+            ...(Object.keys(metadata).length
+              ? [{ type: "text", text: JSON.stringify({ request_metadata: metadata }) }]
+              : []),
           ],
         };
       } catch (error) {
-        console.error("Error in tool call", error);
         if (error instanceof HttpClientError) {
-          console.error("HttpClientError encountered, returning structured error", error);
-          const data = error.data?.response?.data ?? error.data ?? {};
+          const data = error.data ?? {};
           return {
+            isError: true,
             content: [
               {
                 type: "text",
                 text: JSON.stringify({
-                  status: "error", // TODO: get this from http status code?
-                  ...(typeof data === "object" ? data : { data: data }),
+                  ...(typeof data === "object" && !Array.isArray(data) ? data : { data }),
+                  ...(error.status ? { status: error.status } : {}),
+                  ...(error.requestKey ? { request_key: error.requestKey } : {}),
                 }),
               },
             ],
           };
         }
-        throw error;
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                code: "tool_error",
+                message: error instanceof Error ? error.message : "Tool call failed",
+              }),
+            },
+          ],
+        };
       }
     });
   }
@@ -140,25 +157,6 @@ export class MCPProxy {
       console.warn("Failed to parse OPENAPI_MCP_HEADERS environment variable:", error);
       return {};
     }
-  }
-
-  private getContentType(headers: Headers): "text" | "image" | "binary" {
-    const contentType = headers.get("content-type");
-    if (!contentType) return "binary";
-
-    if (contentType.includes("text") || contentType.includes("json")) {
-      return "text";
-    } else if (contentType.includes("image")) {
-      return "image";
-    }
-    return "binary";
-  }
-
-  private truncateToolName(name: string): string {
-    if (name.length <= 64) {
-      return name;
-    }
-    return name.slice(0, 64);
   }
 
   async connect(transport: Transport) {

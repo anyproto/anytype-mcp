@@ -54,7 +54,7 @@ export function determineBaseUrl(openApiSpec?: OpenAPIV3.Document): string {
 }
 
 /**
- * Gets the default OpenAPI spec URL.
+ * Gets the unversioned OpenAPI spec URL, used as the legacy discovery fallback.
  * If ANYTYPE_API_BASE_URL is set, uses it with /docs/openapi.json suffix.
  * Otherwise, returns the default spec URL.
  */

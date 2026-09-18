@@ -2,6 +2,7 @@ import type { Tool } from "@anthropic-ai/sdk/resources/messages/messages";
 import type { JSONSchema7 as IJsonSchema } from "json-schema";
 import type { ChatCompletionTool } from "openai/resources/chat/completions";
 import type { OpenAPIV3, OpenAPIV3_1 } from "openapi-types";
+import { getOperationExclusion, getParameterPolicy, isFileDownload } from "./tool-policy";
 
 type NewToolMethod = {
   name: string;
@@ -19,7 +20,6 @@ type FunctionParameters = {
 
 export class OpenAPIToMCPConverter {
   private schemaCache: Record<string, IJsonSchema> = {};
-  private nameCounter: number = 0;
 
   constructor(private openApiSpec: OpenAPIV3.Document | OpenAPIV3_1.Document) {}
 
@@ -327,152 +327,71 @@ export class OpenAPIToMCPConverter {
       string,
       { openApi: OpenAPIV3.OperationObject & { method: string; path: string }; mcp: NewToolMethod }
     > = {};
-    for (const [path, pathItem] of Object.entries(this.openApiSpec.paths || {})) {
-      if (!pathItem) continue;
-
-      for (const [method, operation] of Object.entries(pathItem)) {
-        // skip "Auth" operations, as they shouldn't be called by mcp client
-        if (!this.isOperation(method, operation) || operation.tags?.includes("Auth")) continue;
-
-        const mcpMethod = this.convertOperationToMCPMethod(operation, method, path);
-        if (mcpMethod) {
-          // convert name to kebab-case to conform mcp tool naming convention
-          const uniqueName = this.ensureUniqueName(mcpMethod.name).replaceAll("_", "-");
-          mcpMethod.name = uniqueName;
-          tools[apiName]!.methods.push(mcpMethod);
-          openApiLookup[apiName + "-" + uniqueName] = { ...operation, method, path };
-          zip[apiName + "-" + uniqueName] = { openApi: { ...operation, method, path }, mcp: mcpMethod };
-        }
+    for (const operation of this.getOperations()) {
+      const mcpMethod = this.convertOperationToMCPMethod(operation, operation.method, operation.path);
+      if (!mcpMethod) continue;
+      // Normalize and truncate the final advertised name, including its prefix.
+      const fullName = `${apiName}-${mcpMethod.name.replaceAll("_", "-")}`.slice(0, 64);
+      const previous = openApiLookup[fullName];
+      if (previous) {
+        throw new Error(
+          `Duplicate tool name "${fullName}": ${previous.method} ${previous.path} and ${operation.method} ${operation.path}. Use distinct operationIds or separate API specs.`,
+        );
       }
+      mcpMethod.name = fullName.slice(apiName.length + 1);
+      tools[apiName].methods.push(mcpMethod);
+      openApiLookup[fullName] = operation;
+      zip[fullName] = { openApi: operation, mcp: mcpMethod };
     }
 
     return { tools, openApiLookup, zip };
   }
 
-  /**
-   * Convert the OpenAPI spec to OpenAI's ChatCompletionTool format
-   */
+  /** All formats use the same input schemas, parameter policy, and capability checks. */
   convertToOpenAITools(): ChatCompletionTool[] {
-    const tools: ChatCompletionTool[] = [];
-
-    for (const [path, pathItem] of Object.entries(this.openApiSpec.paths || {})) {
-      if (!pathItem) continue;
-
-      for (const [method, operation] of Object.entries(pathItem)) {
-        // skip "Auth" operations, as they shouldn't be called by mcp client
-        if (!this.isOperation(method, operation) || operation.tags?.includes("Auth")) continue;
-
-        const parameters = this.convertOperationToJsonSchema(operation, method, path);
-        const tool: ChatCompletionTool = {
-          type: "function",
-          function: {
-            name: operation.operationId!,
-            description: operation.summary || operation.description || "",
-            parameters: parameters as FunctionParameters,
-          },
-        };
-        tools.push(tool);
-      }
-    }
-
-    return tools;
+    return Object.values(this.convertToMCPTools().zip).map(({ openApi, mcp }) => ({
+      type: "function",
+      function: {
+        name: openApi.operationId!,
+        description: mcp.description,
+        parameters: mcp.inputSchema as FunctionParameters,
+      },
+    }));
   }
 
-  /**
-   * Convert the OpenAPI spec to Anthropic's Tool format
-   */
   convertToAnthropicTools(): Tool[] {
-    const tools: Tool[] = [];
+    return Object.values(this.convertToMCPTools().zip).map(({ openApi, mcp }) => ({
+      name: openApi.operationId!,
+      description: mcp.description,
+      input_schema: mcp.inputSchema as Tool["input_schema"],
+    }));
+  }
 
+  private *getOperations(): Generator<OpenAPIV3.OperationObject & { method: string; path: string }> {
     for (const [path, pathItem] of Object.entries(this.openApiSpec.paths || {})) {
       if (!pathItem) continue;
-
-      for (const [method, operation] of Object.entries(pathItem)) {
-        // skip "Auth" operations, as they shouldn't be called by mcp client
-        if (!this.isOperation(method, operation) || operation.tags?.includes("Auth")) continue;
-
-        const parameters = this.convertOperationToJsonSchema(operation, method, path);
-        const tool: Tool = {
-          name: operation.operationId!,
-          description: operation.summary || operation.description || "",
-          input_schema: parameters as Tool["input_schema"],
+      for (const [method, rawOperation] of Object.entries(pathItem)) {
+        if (!this.isOperation(method, rawOperation)) continue;
+        // Operation-level parameters override inherited parameters of the same name/location.
+        const parameters = new Map<string, OpenAPIV3.ParameterObject>();
+        for (const raw of [...(pathItem.parameters || []), ...(rawOperation.parameters || [])]) {
+          const parameter = this.resolveParameter(raw);
+          if (!parameter) throw new Error(`Unresolved parameter at ${method} ${path}`);
+          parameters.set(`${parameter.in}:${parameter.name}`, parameter);
+        }
+        const operation = {
+          ...rawOperation,
+          ...(parameters.size ? { parameters: [...parameters.values()] } : {}),
+          method,
+          path,
         };
-        tools.push(tool);
+        const responses = Object.entries(operation.responses || {})
+          .filter(([status]) => /^2(?:[0-9]{2}|XX)$/i.test(status))
+          .map(([, response]) => this.resolveResponse(response))
+          .filter((response): response is OpenAPIV3.ResponseObject => response !== null);
+        if (!getOperationExclusion(operation, path, responses)) yield operation;
       }
     }
-
-    return tools;
-  }
-
-  private convertComponentsToJsonSchema(): Record<string, IJsonSchema> {
-    const components = this.openApiSpec.components || {};
-    const schema: Record<string, IJsonSchema> = {};
-    for (const [key, value] of Object.entries(components.schemas || {})) {
-      schema[key] = this.convertOpenApiSchemaToJsonSchema(value, new Set());
-    }
-    return schema;
-  }
-  /**
-   * Helper method to convert an operation to a JSON Schema for parameters
-   */
-  private convertOperationToJsonSchema(
-    operation: OpenAPIV3.OperationObject,
-    method: string,
-    path: string,
-  ): IJsonSchema & { type: "object" } {
-    const schema: IJsonSchema & { type: "object" } = {
-      type: "object",
-      properties: {},
-      required: [],
-      $defs: {}, // Omit this.convertComponentsToJsonSchema() to reduce definition size
-    };
-
-    // Handle parameters (path, query, header, cookie)
-    if (operation.parameters) {
-      for (const param of operation.parameters) {
-        const paramObj = this.resolveParameter(param);
-        if (paramObj && paramObj.schema) {
-          // do not include Anytype-Version in the input schema, it's set in http client header by proxy
-          if (paramObj.name === "Anytype-Version") {
-            continue;
-          }
-          const paramSchema = this.convertOpenApiSchemaToJsonSchema(paramObj.schema, new Set());
-          // Merge parameter-level description if available
-          if (paramObj.description) {
-            paramSchema.description = paramObj.description;
-          }
-          schema.properties![paramObj.name] = paramSchema;
-          if (paramObj.required) {
-            schema.required!.push(paramObj.name);
-          }
-        }
-      }
-    }
-
-    // Handle requestBody
-    if (operation.requestBody) {
-      const bodyObj = this.resolveRequestBody(operation.requestBody);
-      if (bodyObj?.content) {
-        if (bodyObj.content["application/json"]?.schema) {
-          const bodySchema = this.convertOpenApiSchemaToJsonSchema(
-            bodyObj.content["application/json"].schema,
-            new Set(),
-          );
-          if (bodySchema.type === "object" && bodySchema.properties) {
-            for (const [name, propSchema] of Object.entries(bodySchema.properties)) {
-              // TODO: Add support for filters
-              if (name === "filters") continue;
-              schema.properties![name] = propSchema;
-            }
-            if (bodySchema.required) {
-              schema.required!.push(...bodySchema.required.filter((r) => r !== "filters"));
-            }
-          }
-        }
-      }
-    }
-
-    return schema;
   }
 
   private isOperation(method: string, operation: any): operation is OpenAPIV3.OperationObject {
@@ -491,9 +410,7 @@ export class OpenAPIToMCPConverter {
     return !("$ref" in body);
   }
 
-  private resolveParameter(
-    param: OpenAPIV3.ParameterObject | OpenAPIV3.ReferenceObject,
-  ): OpenAPIV3.ParameterObject | null {
+  resolveParameter(param: OpenAPIV3.ParameterObject | OpenAPIV3.ReferenceObject): OpenAPIV3.ParameterObject | null {
     if (this.isParameterObject(param)) {
       return param;
     } else {
@@ -517,6 +434,16 @@ export class OpenAPIToMCPConverter {
       }
     }
     return null;
+  }
+
+  /** The converted JSON body schema used to decide whether MCP inputs are flat or wrapped in `body`. */
+  getJsonRequestBodySchema(operation: OpenAPIV3.OperationObject): IJsonSchema | undefined {
+    if (!operation.requestBody) return undefined;
+    const body = this.resolveRequestBody(operation.requestBody);
+    // MCP tools prefer multipart when both media types are offered.
+    if (body?.content["multipart/form-data"]?.schema) return undefined;
+    const schema = body?.content["application/json"]?.schema;
+    return schema ? this.convertOpenApiSchemaToJsonSchema(schema, new Set(), true) : undefined;
   }
 
   private resolveResponse(
@@ -546,7 +473,6 @@ export class OpenAPIToMCPConverter {
     const methodName = operation.operationId;
 
     const inputSchema: IJsonSchema & { type: "object" } = {
-      $defs: {}, // Omit this.convertComponentsToJsonSchema() to reduce definition size
       type: "object",
       properties: {},
       required: [],
@@ -556,19 +482,23 @@ export class OpenAPIToMCPConverter {
     if (operation.parameters) {
       for (const param of operation.parameters) {
         const paramObj = this.resolveParameter(param);
-        if (paramObj && paramObj.schema) {
-          // do not include Anytype-Version in the input schema, it's set in http client header by proxy
-          if (paramObj.name === "Anytype-Version") {
+        if (paramObj) {
+          const policy = getParameterPolicy(paramObj);
+          if (policy.mode === "configured" || policy.mode === "omitted") continue;
+          if (!paramObj.schema) {
+            if (paramObj.required) throw new Error(`Required parameter ${paramObj.name} has no supported schema`);
             continue;
           }
-          const schema = this.convertOpenApiSchemaToJsonSchema(paramObj.schema, new Set(), true);
-          // Merge parameter-level description if available
-          if (paramObj.description) {
-            schema.description = paramObj.description;
+          const schema = { ...this.convertOpenApiSchemaToJsonSchema(paramObj.schema, new Set(), true) };
+          if (policy.description || paramObj.description) {
+            schema.description = policy.description || paramObj.description;
           }
-          inputSchema.properties![paramObj.name] = schema;
-          if (paramObj.required) {
-            inputSchema.required!.push(paramObj.name);
+          if (Object.hasOwn(inputSchema.properties!, policy.inputName)) {
+            throw new Error(`Conflicting tool input "${policy.inputName}" for ${methodName}`);
+          }
+          inputSchema.properties![policy.inputName] = schema;
+          if (paramObj.required && policy.mode !== "idempotency") {
+            inputSchema.required!.push(policy.inputName);
           }
         }
       }
@@ -591,6 +521,9 @@ export class OpenAPIToMCPConverter {
             for (const [name, propSchema] of Object.entries(formSchema.properties)) {
               // TODO: Add support for filters
               if (name === "filters") continue;
+              if (Object.hasOwn(inputSchema.properties!, name)) {
+                throw new Error(`Body field "${name}" conflicts with a tool parameter for ${methodName}`);
+              }
               inputSchema.properties![name] = propSchema;
             }
             if (formSchema.required) {
@@ -600,23 +533,22 @@ export class OpenAPIToMCPConverter {
         }
         // Handle application/json
         else if (bodyObj.content["application/json"]?.schema) {
-          const bodySchema = this.convertOpenApiSchemaToJsonSchema(
-            bodyObj.content["application/json"].schema,
-            new Set(),
-            true,
-          );
+          const bodySchema = this.getJsonRequestBodySchema(operation)!;
           // Merge body schema into the inputSchema's properties
           if (bodySchema.type === "object" && bodySchema.properties) {
             for (const [name, propSchema] of Object.entries(bodySchema.properties)) {
               // TODO: Add support for filters
               if (name === "filters") continue;
+              if (Object.hasOwn(inputSchema.properties!, name)) {
+                throw new Error(`Body field "${name}" conflicts with a tool parameter for ${methodName}`);
+              }
               inputSchema.properties![name] = propSchema;
             }
             if (bodySchema.required) {
               inputSchema.required!.push(...bodySchema.required!.filter((r) => r !== "filters"));
             }
           } else {
-            // If the request body is not an object, just put it under "body"
+            // Open-ended objects and non-object documents are passed intact under "body".
             inputSchema.properties!["body"] = bodySchema;
             inputSchema.required!.push("body");
           }
@@ -624,48 +556,54 @@ export class OpenAPIToMCPConverter {
       }
     }
 
-    // Build description including error responses
     let description = operation.summary || operation.description || "";
-    if (operation.responses) {
-      const errorResponses = Object.entries(operation.responses)
-        .filter(([code]) => code.startsWith("4") || code.startsWith("5"))
-        .map(([code, response]) => {
-          const responseObj = this.resolveResponse(response);
-          let errorDesc = responseObj?.description || "";
-          return `${code}: ${errorDesc}`;
-        });
+    if (isFileDownload({ ...operation, method })) {
+      description += ". Saves locally and returns path, filename, media_type, and size in bytes.";
+    }
+    const outputSchema: IJsonSchema | null = isFileDownload({ ...operation, method })
+      ? {
+          type: "object",
+          properties: {
+            path: { type: "string" },
+            filename: { type: "string" },
+            media_type: { type: "string" },
+            size: { type: "integer" },
+          },
+          required: ["path", "filename", "media_type", "size"],
+        }
+      : this.extractResponseType(operation.responses);
+    return {
+      name: methodName,
+      description,
+      inputSchema: this.completeSchema(inputSchema) as IJsonSchema & { type: "object" },
+      ...(outputSchema ? { outputSchema: this.completeSchema(outputSchema) } : {}),
+    };
+  }
 
-      if (errorResponses.length > 0) {
-        description += "\nError Responses:\n" + errorResponses.join("\n");
+  /** Include only definitions used by unresolved/recursive references. */
+  private completeSchema(schema: IJsonSchema): IJsonSchema {
+    const definitions: Record<string, IJsonSchema> = {};
+    const pending = new Set<string>();
+    const collect = (value: unknown): void => {
+      if (!value || typeof value !== "object") return;
+      if ("$ref" in value && typeof value.$ref === "string" && value.$ref.startsWith("#/$defs/")) {
+        pending.add(value.$ref.slice("#/$defs/".length));
       }
+      Object.values(value).forEach(collect);
+    };
+    collect(schema);
+    for (const name of pending) {
+      const raw = this.openApiSpec.components?.schemas?.[name];
+      if (!raw) throw new Error(`Unresolved schema definition: ${name}`);
+      const definition = this.convertOpenApiSchemaToJsonSchema(
+        raw as OpenAPIV3.SchemaObject | OpenAPIV3.ReferenceObject,
+        new Set(),
+        false,
+      );
+      definitions[name] = definition;
+      collect(definition);
     }
-
-    // Extract return type (output schema)
-    const outputSchema = this.extractResponseType(operation.responses);
-
-    // Generate Zod schema from input schema
-    try {
-      // const zodSchemaStr = jsonSchemaToZod(inputSchema, { module: "cjs" })
-      // console.log(zodSchemaStr)
-      // // Execute the function with the zod instance
-      // const zodSchema = eval(zodSchemaStr) as z.ZodType
-
-      return {
-        name: methodName,
-        description,
-        inputSchema,
-        ...(outputSchema ? { outputSchema } : {}),
-      };
-    } catch (error) {
-      console.warn(`Failed to generate Zod schema for ${methodName}:`, error);
-      // Fallback to a basic object schema
-      return {
-        name: methodName,
-        description,
-        inputSchema,
-        ...(outputSchema ? { outputSchema } : {}),
-      };
-    }
+    return { ...schema, ...(pending.size ? { $defs: definitions } : {}) };
   }
 
   private extractResponseType(responses: OpenAPIV3.ResponsesObject | undefined): IJsonSchema | null {
@@ -682,7 +620,6 @@ export class OpenAPIToMCPConverter {
         new Set(),
         true,
       );
-      outputSchema["$defs"] = {}; // Omit this.convertComponentsToJsonSchema() to reduce definition size
 
       // Preserve the response description if available and not already set
       if (responseObj.description && !outputSchema.description) {
@@ -699,20 +636,5 @@ export class OpenAPIToMCPConverter {
 
     // Fallback
     return { type: "string", description: responseObj.description || "" };
-  }
-
-  private ensureUniqueName(name: string): string {
-    if (name.length <= 64) {
-      return name;
-    }
-
-    const truncatedName = name.slice(0, 64 - 5); // Reserve space for suffix
-    const uniqueSuffix = this.generateUniqueSuffix();
-    return `${truncatedName}-${uniqueSuffix}`;
-  }
-
-  private generateUniqueSuffix(): string {
-    this.nameCounter += 1;
-    return this.nameCounter.toString().padStart(4, "0");
   }
 }

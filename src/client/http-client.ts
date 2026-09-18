@@ -2,9 +2,14 @@ import type { AxiosInstance } from "axios";
 import FormData from "form-data";
 import fs from "fs";
 import { Headers } from "node-fetch";
+import { randomUUID } from "node:crypto";
 import OpenAPIClientAxios from "openapi-client-axios";
 import type { OpenAPIV3, OpenAPIV3_1 } from "openapi-types";
 import { isFileUploadParameter } from "../openapi/file-upload";
+import { OpenAPIToMCPConverter } from "../openapi/parser";
+import { getParameterPolicy, isFileDownload } from "../openapi/tool-policy";
+import { debug } from "../utils/debug";
+import { readDownloadError, saveDownload } from "./download-file";
 
 export type HttpClientConfig = {
   baseUrl: string;
@@ -15,6 +20,7 @@ export type HttpClientResponse<T = any> = {
   data: T;
   status: number;
   headers: Headers;
+  requestKey?: string;
 };
 
 export class HttpClientError extends Error {
@@ -23,6 +29,7 @@ export class HttpClientError extends Error {
     public status: number,
     public data: any,
     public headers?: Headers,
+    public requestKey?: string,
   ) {
     super(`${status} ${message}`);
     this.name = "HttpClientError";
@@ -32,8 +39,17 @@ export class HttpClientError extends Error {
 export class HttpClient {
   private api: Promise<AxiosInstance>;
   private client: OpenAPIClientAxios;
+  private converter: OpenAPIToMCPConverter;
+  private configuredHeaders: Record<string, string>;
 
   constructor(config: HttpClientConfig, openApiSpec: OpenAPIV3.Document | OpenAPIV3_1.Document) {
+    this.converter = new OpenAPIToMCPConverter(openApiSpec);
+    this.configuredHeaders = Object.fromEntries(
+      Object.entries(config.headers || {}).map(([name, value]) => [name.toLowerCase(), value]),
+    );
+    if (this.configuredHeaders["idempotency-key"] !== undefined) {
+      throw new Error("A global Idempotency-Key would be reused across writes. Use request_key on individual calls.");
+    }
     // @ts-expect-error OpenAPIClientAxios can be imported as default or named export, we handle both cases
     this.client = new (OpenAPIClientAxios.default ?? OpenAPIClientAxios)({
       definition: openApiSpec,
@@ -53,7 +69,6 @@ export class HttpClient {
     operation: OpenAPIV3.OperationObject,
     params: Record<string, any>,
   ): Promise<FormData | null> {
-    console.error("prepareFileUpload", { operation, params });
     const fileParams = isFileUploadParameter(operation);
     if (fileParams.length === 0) return null;
 
@@ -61,7 +76,6 @@ export class HttpClient {
 
     // Handle file uploads
     for (const param of fileParams) {
-      console.error(`extracting ${param}`, { params });
       const filePath = params[param];
       if (!filePath) {
         throw new Error(`File path must be provided for parameter: ${param}`);
@@ -72,10 +86,8 @@ export class HttpClient {
           break;
         case "object":
           if (Array.isArray(filePath)) {
-            let fileCount = 0;
             for (const file of filePath) {
               addFile(param, file);
-              fileCount++;
             }
             break;
           }
@@ -110,6 +122,7 @@ export class HttpClient {
   async executeOperation<T = any>(
     operation: OpenAPIV3.OperationObject & { method: string; path: string },
     params: Record<string, any> = {},
+    options: { signal?: globalThis.AbortSignal } = {},
   ): Promise<HttpClientResponse<T>> {
     const api = await this.api;
     const operationId = operation.operationId;
@@ -117,37 +130,59 @@ export class HttpClient {
       throw new Error("Operation ID is required");
     }
 
-    // Handle file uploads if present
-    const formData = await this.prepareFileUpload(operation, params);
-
-    // Separate parameters based on their location
-    const urlParameters: Record<string, any> = {};
-    const bodyParams: Record<string, any> = formData || { ...params };
-
-    // Extract path and query parameters based on operation definition
-    if (operation.parameters) {
-      for (const param of operation.parameters) {
-        if ("name" in param && param.name && param.in) {
-          if (param.in === "path" || param.in === "query") {
-            if (params[param.name] !== undefined) {
-              urlParameters[param.name] = params[param.name];
-              if (!formData) {
-                delete bodyParams[param.name];
-              }
-            }
+    // OpenAPIClientAxios routes declared parameters to path, query, headers,
+    // and cookies. Remove them before constructing either JSON or multipart bodies.
+    const requestParameters: Record<string, any> = {};
+    const bodyArguments = { ...params };
+    let requestKey: string | undefined;
+    for (const parameter of operation.parameters || []) {
+      const param = this.converter.resolveParameter(parameter);
+      if (param) {
+        const policy = getParameterPolicy(param);
+        if (policy.mode === "configured" || policy.mode === "omitted") {
+          delete bodyArguments[param.name];
+          if (policy.mode === "configured" && param.required && !this.configuredHeaders[param.name.toLowerCase()]) {
+            throw new Error(`Required header ${param.name} must be set in OPENAPI_MCP_HEADERS`);
           }
+          continue;
+        }
+        const names = [
+          ...new Set([policy.inputName, policy.legacyName, param.name].filter((name) => name !== undefined)),
+        ];
+        const supplied = names.filter((name) => Object.hasOwn(params, name) && params[name] !== undefined);
+        const value = supplied.length ? params[supplied[0]] : undefined;
+        if (supplied.some((name) => params[name] !== value)) {
+          throw new Error(`Conflicting values for ${policy.inputName} and its legacy header alias`);
+        }
+        names.forEach((name) => delete bodyArguments[name]);
+        if (policy.mode === "idempotency") {
+          if (value !== undefined && (typeof value !== "string" || !value.trim())) {
+            throw new Error("request_key must be a non-empty string");
+          }
+          // Generated once per invocation; any transport replay of this prepared
+          // request keeps the header. Separate invocations get separate keys.
+          requestKey = value ?? randomUUID();
+          requestParameters[param.name] = requestKey;
+        } else if (value !== undefined) {
+          requestParameters[param.name] = value;
         }
       }
     }
 
-    // Add all parameters as url parameters if there is no requestBody defined
-    if (!operation.requestBody && !formData) {
-      for (const key in bodyParams) {
-        if (bodyParams[key] !== undefined) {
-          urlParameters[key] = bodyParams[key];
-          delete bodyParams[key];
-        }
-      }
+    const formData = await this.prepareFileUpload(operation, bodyArguments);
+    const bodySchema = this.converter.getJsonRequestBodySchema(operation);
+    // Use the same converted schema as the tool generator: a real document
+    // property named "body" must remain wrapped when its object schema is flat.
+    const wrappedBody = bodySchema && !(bodySchema.type === "object" && bodySchema.properties);
+    let bodyParams: any;
+    if (!operation.requestBody) {
+      Object.assign(requestParameters, bodyArguments);
+    } else if (formData) {
+      bodyParams = formData;
+    } else if (wrappedBody) {
+      bodyParams = bodyArguments.body;
+    } else if (Object.keys(bodyArguments).length > 0) {
+      bodyParams = bodyArguments;
     }
 
     const operationFn = (api as any)[operationId];
@@ -155,9 +190,11 @@ export class HttpClient {
       throw new Error(`Operation ${operationId} not found`);
     }
 
+    const startedAt = Date.now();
+    debug("request", { operationId });
     try {
       // If we have form data, we need to set the correct headers
-      const hasBody = Object.keys(bodyParams).length > 0;
+      const hasBody = bodyParams !== undefined;
       const headers = formData
         ? formData.getHeaders()
         : { ...(hasBody ? { "Content-Type": "application/json" } : { "Content-Type": null }) };
@@ -165,27 +202,41 @@ export class HttpClient {
         headers: {
           ...headers,
         },
+        ...(isFileDownload(operation) ? { responseType: "stream" as const } : {}),
+        ...(options.signal ? { signal: options.signal } : {}),
       };
 
-      // first argument is url parameters, second is body parameters
-      console.error("calling operation", { operationId, urlParameters, bodyParams, requestConfig });
-      const response = await operationFn(urlParameters, hasBody ? bodyParams : undefined, requestConfig);
-
-      console.error("operation finished");
+      // First argument is OpenAPI parameters; second is the actual request document.
+      const response = await operationFn(requestParameters, bodyParams, requestConfig);
+      debug("response", { operationId, status: response.status, durationMs: Date.now() - startedAt });
       // Convert axios headers to Headers object
       const responseHeaders = new Headers();
       Object.entries(response.headers).forEach(([key, value]) => {
         if (value) responseHeaders.append(key, value.toString());
       });
 
+      let data = response.data;
+      if (isFileDownload(operation)) {
+        try {
+          data = await saveDownload(response.data, responseHeaders, options.signal);
+        } catch {
+          throw new HttpClientError("Download failed", 0, {
+            code: "download_failed",
+            message: "Could not save the downloaded file.",
+          });
+        }
+      }
+
       return {
-        data: response.data,
+        data,
         status: response.status,
         headers: responseHeaders,
+        ...(requestKey ? { requestKey } : {}),
       };
     } catch (error: any) {
+      if (error instanceof HttpClientError) throw error;
       if (error.response) {
-        console.error("Error in http client", error);
+        debug("http_error", { operationId, status: error.response.status, durationMs: Date.now() - startedAt });
         const headers = new Headers();
         Object.entries(error.response.headers).forEach(([key, value]) => {
           if (value) headers.append(key, value.toString());
@@ -194,11 +245,23 @@ export class HttpClient {
         throw new HttpClientError(
           error.response.statusText || "Request failed",
           error.response.status,
-          error.response.data,
+          isFileDownload(operation) ? await readDownloadError(error.response.data) : error.response.data,
           headers,
+          requestKey,
         );
       }
-      throw error;
+      debug("transport_error", { operationId, durationMs: Date.now() - startedAt });
+      throw new HttpClientError(
+        "No response received",
+        0,
+        {
+          code: "transport_error",
+          message: "No response received; the operation may have completed.",
+          ...(requestKey ? { hint: "Retry the same write with the returned request_key." } : {}),
+        },
+        undefined,
+        requestKey,
+      );
     }
   }
 }

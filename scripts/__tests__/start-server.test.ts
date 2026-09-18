@@ -66,6 +66,113 @@ describe("loadOpenApiSpec", () => {
 
   afterEach(() => {
     vi.resetAllMocks();
+    vi.unstubAllEnvs();
+  });
+
+  describe("automatic API selection", () => {
+    beforeEach(() => {
+      vi.stubEnv("ANYTYPE_API_BASE_URL", "");
+    });
+
+    it("prefers v2 even when the default endpoint may still serve v1", async () => {
+      vi.mocked(axios.get).mockResolvedValueOnce({ data: validOpenApiSpec });
+
+      expect(await loadOpenApiSpec()).toEqual(validOpenApiSpec);
+      expect(axios.get).toHaveBeenCalledExactlyOnceWith("http://127.0.0.1:31009/v2/docs/openapi.json");
+    });
+
+    it.each([404, 410])("loads the legacy spec at the server root when v2 returns %s", async (status) => {
+      const legacySpec = {
+        ...validOpenApiSpec,
+        paths: { "/spaces": validOpenApiSpec.paths["/pets"] },
+      };
+      vi.mocked(axios.get)
+        .mockRejectedValueOnce({ response: { status } })
+        .mockResolvedValueOnce({ data: JSON.stringify(legacySpec) });
+
+      expect(await loadOpenApiSpec()).toEqual(legacySpec);
+      expect(vi.mocked(axios.get).mock.calls).toEqual([
+        ["http://127.0.0.1:31009/v2/docs/openapi.json"],
+        ["http://127.0.0.1:31009/docs/openapi.json"],
+      ]);
+      expect(console.error).toHaveBeenCalledWith(
+        "v2 OpenAPI endpoint unavailable; falling back to /docs/openapi.json.",
+      );
+    });
+
+    it("uses the configured server for both probes", async () => {
+      vi.stubEnv("ANYTYPE_API_BASE_URL", "https://api.example.com:31012/some/path");
+      vi.mocked(axios.get)
+        .mockRejectedValueOnce({ response: { status: 404 } })
+        .mockResolvedValueOnce({ data: validOpenApiSpec });
+
+      expect(await loadOpenApiSpec()).toEqual(validOpenApiSpec);
+      expect(vi.mocked(axios.get).mock.calls).toEqual([
+        ["https://api.example.com:31012/v2/docs/openapi.json"],
+        ["https://api.example.com:31012/docs/openapi.json"],
+      ]);
+    });
+
+    it.each([401, 403, 429, 500, 503])("does not fall back on HTTP %s", async (status) => {
+      const exit = vi.spyOn(process, "exit").mockImplementation((() => {}) as any);
+      vi.mocked(axios.get).mockRejectedValueOnce({ response: { status }, message: "Request failed" });
+
+      await loadOpenApiSpec();
+
+      expect(exit).toHaveBeenCalledWith(1);
+      expect(axios.get).toHaveBeenCalledTimes(1);
+    });
+
+    it.each(["ECONNREFUSED", "ETIMEDOUT"])("does not fall back on %s", async (code) => {
+      const exit = vi.spyOn(process, "exit").mockImplementation((() => {}) as any);
+      vi.mocked(axios.get).mockRejectedValueOnce({ code, message: "Network error" });
+
+      await loadOpenApiSpec();
+
+      expect(exit).toHaveBeenCalledWith(1);
+      expect(axios.get).toHaveBeenCalledTimes(1);
+    });
+
+    it("reports invalid v2 JSON without falling back", async () => {
+      const exit = vi.spyOn(process, "exit").mockImplementation((() => {}) as any);
+      vi.mocked(axios.get).mockResolvedValueOnce({ data: "invalid JSON" });
+
+      await loadOpenApiSpec();
+
+      expect(exit).toHaveBeenCalledWith(1);
+      expect(axios.get).toHaveBeenCalledTimes(1);
+      expect(console.error).toHaveBeenCalledWith("Failed to parse OpenAPI specification:", expect.any(String));
+    });
+
+    it("reports a failed fallback without further probes", async () => {
+      const exit = vi.spyOn(process, "exit").mockImplementation((() => {}) as any);
+      vi.mocked(axios.get)
+        .mockRejectedValueOnce({ response: { status: 404 } })
+        .mockRejectedValueOnce({ response: { status: 404 }, message: "Legacy spec missing" });
+
+      await loadOpenApiSpec();
+
+      expect(exit).toHaveBeenCalledWith(1);
+      expect(axios.get).toHaveBeenCalledTimes(2);
+      expect(console.error).toHaveBeenCalledWith(
+        "Failed to fetch OpenAPI specification from URL:",
+        "Legacy spec missing",
+      );
+    });
+
+    it.each(["/v1/docs/openapi.json", "/v2/docs/openapi.json", "/docs/openapi.json"])(
+      "keeps an explicitly selected %s pinned, even when missing",
+      async (path) => {
+        const exit = vi.spyOn(process, "exit").mockImplementation((() => {}) as any);
+        vi.mocked(axios.get).mockRejectedValueOnce({ response: { status: 404 }, message: "Not found" });
+        const url = `http://127.0.0.1:31009${path}`;
+
+        await loadOpenApiSpec(url);
+
+        expect(exit).toHaveBeenCalledWith(1);
+        expect(axios.get).toHaveBeenCalledExactlyOnceWith(url);
+      },
+    );
   });
 
   describe("Local file loading", () => {

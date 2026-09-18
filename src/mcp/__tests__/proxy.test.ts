@@ -2,7 +2,7 @@ import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { Headers } from "node-fetch";
 import { OpenAPIV3 } from "openapi-types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { HttpClient } from "../../client/http-client";
+import { HttpClient, HttpClientError } from "../../client/http-client";
 import { MCPProxy } from "../proxy";
 
 // Mock the dependencies
@@ -104,6 +104,204 @@ describe("MCPProxy", () => {
       );
     });
 
+    it("preserves structured API failures and marks them as MCP errors", async () => {
+      const data = {
+        code: "validation_failed",
+        message: "Invalid document",
+        issues: [{ path: "/name", message: "Required" }],
+        hint: "Provide a name",
+      };
+      // HttpClient is mocked in this suite, including its error constructor.
+      const error = Object.assign(new HttpClientError("Bad Request", 400, data), {
+        status: 400,
+        data,
+        requestKey: "retry-1",
+      });
+      vi.mocked(HttpClient.prototype.executeOperation).mockRejectedValueOnce(error);
+      const [, call] = getHandlers(proxy);
+      const result = await call({ params: { name: "API-getTest", arguments: {} } });
+      expect(result.isError).toBe(true);
+      expect(JSON.parse(result.content[0].text)).toEqual({ ...data, status: 400, request_key: "retry-1" });
+    });
+
+    it("returns tool input failures without exposing an exception stack", async () => {
+      vi.mocked(HttpClient.prototype.executeOperation).mockRejectedValueOnce(
+        new Error("Conflicting values for expected_etag"),
+      );
+      const [, call] = getHandlers(proxy);
+      const result = await call({ params: { name: "API-getTest", arguments: {} } });
+      expect(result.isError).toBe(true);
+      expect(JSON.parse(result.content[0].text)).toEqual({
+        code: "tool_error",
+        message: "Conflicting values for expected_etag",
+      });
+    });
+
+    it("returns etag and retry metadata without changing successful API data", async () => {
+      vi.mocked(HttpClient.prototype.executeOperation).mockResolvedValueOnce({
+        ...mockSuccessResponse,
+        headers: new Headers({ etag: '"revision"' }),
+        requestKey: "retry-1",
+      });
+      const [, call] = getHandlers(proxy);
+      const result = await call({ params: { name: "API-getTest", arguments: {} } });
+      expect(result.content.map((item: { text: string }) => JSON.parse(item.text))).toEqual([
+        { message: "success" },
+        { request_metadata: { etag: '"revision"', request_key: "retry-1" } },
+      ]);
+    });
+
+    describe("compact write responses", () => {
+      const markdown = "Large object content\n".repeat(10000);
+      const fullObject = {
+        id: "object-1",
+        space_id: "space-1",
+        name: "Project notes",
+        archived: false,
+        markdown,
+        snippet: markdown.slice(0, 100),
+        properties: [{ id: "property-1", text: markdown }],
+        icon: { format: "emoji", emoji: "🍅" },
+        type: { id: "type-1", key: "page", name: "Page", properties: [{ id: "property-1" }] },
+      };
+      const identity = {
+        id: "object-1",
+        space_id: "space-1",
+        name: "Project notes",
+        archived: false,
+        type: { id: "type-1", key: "page", name: "Page" },
+      };
+
+      function writeProxy(operationId: string, method: string, path: string) {
+        return new MCPProxy(
+          "write-test",
+          createMockOpenApiSpec({
+            paths: { [path]: { [method]: { operationId, responses: { "200": { description: "OK" } } } } },
+          }),
+        );
+      }
+
+      it.each([
+        ["create_object", "post", "/v1/spaces/{space_id}/objects"],
+        ["update_object", "patch", "/v1/spaces/{space_id}/objects/{object_id}"],
+        ["delete_object", "delete", "/v1/spaces/{space_id}/objects/{object_id}"],
+        ["create_chat", "post", "/v1/spaces/{space_id}/chats"],
+      ])("returns a small receipt for %s without losing write metadata", async (operationId, method, path) => {
+        const metadata = {
+          warnings: [{ message: "A value was normalized" }],
+          issues: [{ path: "/name", message: "Check the name" }],
+          created: { properties: [{ id: "generated-property" }] },
+          created_blocks: { "ops[0]": "generated-block" },
+          created_views: { "ops[1]": "generated-view" },
+          diff_stats: { inserted: 1 },
+          dry_run: false,
+          etag: '"revision"',
+        };
+        const data = { object: { ...fullObject, ...metadata }, warnings: [{ message: "Envelope warning" }] };
+        vi.mocked(HttpClient.prototype.executeOperation).mockResolvedValueOnce({
+          ...mockSuccessResponse,
+          data,
+          headers: new Headers({ etag: '"revision"' }),
+          requestKey: "retry-1",
+        });
+        const [, call] = getHandlers(writeProxy(operationId, method, path));
+        const result = await call({ params: { name: `API-${operationId.replaceAll("_", "-")}`, arguments: {} } });
+        expect(JSON.parse(result.content[0].text)).toEqual({ ...data, object: { ...identity, ...metadata } });
+        expect(JSON.parse(result.content[1].text)).toEqual({
+          request_metadata: { etag: '"revision"', request_key: "retry-1" },
+        });
+        expect(result.content[0].text.length).toBeLessThan(1000);
+        expect(data.object.markdown).toBe(markdown);
+      });
+
+      it.each([
+        ["get_object", "get", "/v1/spaces/{space_id}/objects/{object_id}", { object: fullObject }],
+        ["search_space", "post", "/v1/spaces/{space_id}/search", { data: [fullObject] }],
+        ["create_object", "post", "/custom/objects", { object: fullObject }],
+        ["create_object", "post", "/v1/spaces/{space_id}/objects", { warnings: ["Unexpected response"] }],
+        ["create_object", "post", "/v1/spaces/{space_id}/objects", { object: { markdown } }],
+        ["create_object", "post", "/v1/spaces/{space_id}/objects", null],
+        [
+          "create_object",
+          "post",
+          "/v2/spaces/{space_id}/objects",
+          {
+            id: "object-1",
+            etag: '"revision"',
+            type: "page",
+            dry_run: false,
+            created: { options: [{ id: "option-1" }] },
+            warnings: [{ message: "Normalized" }],
+          },
+        ],
+        [
+          "patch_object",
+          "patch",
+          "/v2/spaces/{space_id}/objects/{object_id}",
+          { etag: '"revision"', created_blocks: { "ops[0]": "block-1" }, diff_stats: { inserted: 1 }, dry_run: true },
+        ],
+      ])("preserves %s responses at %s %s", async (operationId, method, path, data) => {
+        vi.mocked(HttpClient.prototype.executeOperation).mockResolvedValueOnce({ ...mockSuccessResponse, data });
+        const [, call] = getHandlers(writeProxy(operationId, method, path));
+        const result = await call({ params: { name: `API-${operationId.replaceAll("_", "-")}`, arguments: {} } });
+        expect(JSON.parse(result.content[0].text)).toEqual(data);
+      });
+
+      it("preserves a null type and detailed write errors", async () => {
+        const [, call] = getHandlers(writeProxy("create_object", "post", "/v1/spaces/{space_id}/objects"));
+        const request = { params: { name: "API-create-object", arguments: {} } };
+        vi.mocked(HttpClient.prototype.executeOperation).mockResolvedValueOnce({
+          ...mockSuccessResponse,
+          data: { object: { ...fullObject, type: null } },
+        });
+        expect(JSON.parse((await call(request)).content[0].text)).toEqual({ object: { ...identity, type: null } });
+        const data = { code: "validation_failed", object: fullObject, issues: [{ message: "Invalid content" }] };
+        vi.mocked(HttpClient.prototype.executeOperation).mockRejectedValueOnce(
+          Object.assign(new HttpClientError("Bad Request", 400, data), { status: 400, data }),
+        );
+        const result = await call(request);
+        expect(result.isError).toBe(true);
+        expect(JSON.parse(result.content[0].text)).toEqual({ ...data, status: 400 });
+      });
+    });
+
+    it("cannot dispatch an excluded event stream", async () => {
+      const testProxy = new MCPProxy(
+        "test-proxy",
+        createMockOpenApiSpec({
+          paths: {
+            "/stream": {
+              get: {
+                operationId: "stream",
+                responses: { "200": { description: "Stream", content: { "text/event-stream": {} } } },
+              },
+            },
+          },
+        }),
+      );
+      const [list, call] = getHandlers(testProxy);
+      expect(await list()).toEqual({ tools: [] });
+      await expect(call({ params: { name: "API-stream", arguments: {} } })).rejects.toThrow("not found");
+      expect(HttpClient.prototype.executeOperation).not.toHaveBeenCalled();
+    });
+
+    it("dispatches a long name exactly as advertised", async () => {
+      const operationId = "a".repeat(80);
+      const testProxy = new MCPProxy(
+        "test-proxy",
+        createMockOpenApiSpec({
+          paths: {
+            "/long": { get: { operationId, responses: { "200": { description: "OK" } } } },
+          },
+        }),
+      );
+      vi.mocked(HttpClient.prototype.executeOperation).mockResolvedValueOnce(mockSuccessResponse);
+      const [list, call] = getHandlers(testProxy);
+      const { tools } = await list();
+      await call({ params: { name: tools[0].name, arguments: {} } });
+      expect(HttpClient.prototype.executeOperation).toHaveBeenCalledWith(expect.objectContaining({ operationId }), {});
+    });
+
     it("should handle tool names exceeding 64 characters", async () => {
       (HttpClient.prototype.executeOperation as ReturnType<typeof vi.fn>).mockResolvedValue(mockSuccessResponse);
 
@@ -124,18 +322,6 @@ describe("MCPProxy", () => {
       expect(result).toEqual({
         content: [{ type: "text", text: JSON.stringify({ message: "success" }) }],
       });
-    });
-  });
-
-  describe("getContentType", () => {
-    it("should return correct content type for different headers", () => {
-      const getContentType = (proxy as any).getContentType.bind(proxy);
-
-      expect(getContentType(new Headers({ "content-type": "text/plain" }))).toBe("text");
-      expect(getContentType(new Headers({ "content-type": "application/json" }))).toBe("text");
-      expect(getContentType(new Headers({ "content-type": "image/jpeg" }))).toBe("image");
-      expect(getContentType(new Headers({ "content-type": "application/octet-stream" }))).toBe("binary");
-      expect(getContentType(new Headers())).toBe("binary");
     });
   });
 

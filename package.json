@@ -16,6 +16,7 @@
     "build": "tsc -build && node scripts/build-cli.js",
     "dev": "tsx watch scripts/start-server.ts",
     "parse-openapi": "tsx scripts/parse-openapi.ts",
+    "measure-tools": "bun scripts/measure-tools.ts",
     "lint": "eslint \"src/**/*.ts\" \"scripts/**/*.ts\"",
     "lint:fix": "eslint --fix \"src/**/*.ts\" \"scripts/**/*.ts\"",
     "format": "prettier --write \"src/**/*.ts\" \"scripts/**/*.ts\"",
