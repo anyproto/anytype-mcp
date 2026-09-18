@@ -251,6 +251,27 @@ describe("see_also references", () => {
     it("types a referenced parameter with a referenced schema like the tool converter does", () => {
       expect(toolSpelling({ query: { limit: "25" } }, refIndex, "list_things")).toBe('{"limit":25}');
     });
+
+    it("follows a chain of schema references, and a cycle types as a string", () => {
+      const chained = buildOperationIndex(
+        {
+          "API-list-things": {
+            operationId: "list_things",
+            method: "get",
+            path: "/v2/things",
+            parameters: [
+              { name: "limit", in: "query", schema: { $ref: "#/components/schemas/LimitAlias" } },
+              { name: "loop", in: "query", schema: { $ref: "#/components/schemas/Loop" } },
+            ],
+            responses: {},
+          },
+        },
+        {
+          schemas: { LimitAlias: { $ref: "#/components/schemas/Limit" }, Limit: { type: "integer" }, Loop: { $ref: "#/components/schemas/Loop" } },
+        } as never,
+      );
+      expect(toolSpelling({ query: { limit: "25", loop: "1" } }, chained, "list_things")).toBe('{"limit":25,"loop":"1"}');
+    });
   });
 
   describe("servesJsonEnvelope", () => {
@@ -264,6 +285,38 @@ describe("see_also references", () => {
       expect(
         servesJsonEnvelope({ responses: { "200": { description: "bytes", content: { "application/octet-stream": {} } } } }),
       ).toBe(false);
+    });
+
+    it("resolves a referenced response and uses the actual status", () => {
+      const components = {
+        responses: { Download: { description: "bytes", content: { "application/octet-stream": {} } } },
+      } as never;
+      const operation = {
+        responses: {
+          "200": { $ref: "#/components/responses/Download" },
+          "206": { description: "json", content: { "application/json": {} } },
+        },
+      };
+      expect(servesJsonEnvelope(operation, 200, components)).toBe(false);
+      expect(servesJsonEnvelope(operation, 206, components)).toBe(true);
+      expect(servesJsonEnvelope(operation, undefined, components)).toBe(false);
+    });
+
+    it("a known status falls back to default, never to another status's declaration", () => {
+      const operation = {
+        responses: {
+          "200": { description: "json", content: { "application/json": {} } },
+          default: { description: "bytes", content: { "application/octet-stream": {} } },
+        },
+      };
+      expect(servesJsonEnvelope(operation, 206)).toBe(false);
+      expect(servesJsonEnvelope(operation, 200)).toBe(true);
+    });
+
+    it("honours a 2XX range declaration", () => {
+      const operation = { responses: { "2XX": { description: "bytes", content: { "application/octet-stream": {} } } } };
+      expect(servesJsonEnvelope(operation, 200)).toBe(false);
+      expect(servesJsonEnvelope(operation)).toBe(false);
     });
   });
 
@@ -307,8 +360,10 @@ describe("see_also references", () => {
     });
 
     it("a malformed reference is passed through without annotation", () => {
-      const out = respellResponse({ warnings: [{ message: "m", see_also: [{}, { op: "" }, { params: { a: "b" } }] }] }, index);
-      expect(out.warnings[0].see_also).toEqual([{}, { op: "" }, { params: { a: "b" } }]);
+      const refs = [{}, { op: "" }, { params: { a: "b" } }, { query: ["true"] }, { op: "list_spaces", params: ["s"] }];
+      const out = respellResponse({ warnings: [{ message: "m", hint: "?0=true", see_also: refs }] }, index);
+      expect(out.warnings[0].see_also).toEqual(refs);
+      expect(out.warnings[0].hint).toBe("?0=true");
     });
 
     it("something that is not an issue is not rewritten even under an issue-shaped key", () => {

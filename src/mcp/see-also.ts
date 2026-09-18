@@ -47,13 +47,25 @@ export type OperationIndex = Record<
 
 type LookupOperation = OpenAPIV3.OperationObject & { method: string; path: string };
 
-/** Follows one `#/components/<kind>/<name>` reference into the document's components. */
-function resolveComponent<T>(ref: string, components: OpenAPIV3.ComponentsObject | undefined): T | undefined {
-  const m = /^#\/components\/([a-zA-Z]+)\/(.+)$/.exec(ref);
-  if (!m || !components) return undefined;
-  const group = (components as Record<string, Record<string, unknown> | undefined>)[m[1]];
-  const found = group?.[decodeURIComponent(m[2])];
-  return found && typeof found === "object" ? (found as T) : undefined;
+/**
+ * Follows `#/components/<kind>/<name>` references into the document's
+ * components, through chains of references, with cycle protection.
+ */
+function resolveComponent<T extends object>(
+  value: T | OpenAPIV3.ReferenceObject | undefined,
+  components: OpenAPIV3.ComponentsObject | undefined,
+): T | undefined {
+  const seen = new Set<string>();
+  let current: unknown = value;
+  while (current && typeof current === "object" && "$ref" in current) {
+    const ref = (current as OpenAPIV3.ReferenceObject).$ref;
+    const m = /^#\/components\/([a-zA-Z]+)\/(.+)$/.exec(ref);
+    if (!m || !components || seen.has(ref)) return undefined;
+    seen.add(ref);
+    const group = (components as Record<string, Record<string, unknown> | undefined>)[m[1]];
+    current = group?.[decodeURIComponent(m[2])];
+  }
+  return current && typeof current === "object" ? (current as T) : undefined;
 }
 
 function parameterTypes(
@@ -62,12 +74,9 @@ function parameterTypes(
 ): Record<string, ParameterType> {
   const types: Record<string, ParameterType> = {};
   for (const raw of operation.parameters ?? []) {
-    const param = "$ref" in raw ? resolveComponent<OpenAPIV3.ParameterObject>(raw.$ref, components) : raw;
+    const param = resolveComponent<OpenAPIV3.ParameterObject>(raw, components);
     if (!param || (param.in !== "path" && param.in !== "query")) continue;
-    const schema =
-      param.schema && "$ref" in param.schema
-        ? resolveComponent<OpenAPIV3.SchemaObject>(param.schema.$ref, components)
-        : param.schema;
+    const schema = resolveComponent<OpenAPIV3.SchemaObject>(param.schema, components);
     const type = schema?.type;
     types[param.name] = type === "integer" || type === "number" || type === "boolean" ? type : "string";
   }
@@ -98,15 +107,28 @@ export function buildOperationIndex(
 }
 
 /**
- * Whether an operation answers with a JSON envelope this layer may re-spell.
- * A file download's body is content, and content that happens to be JSON
- * with a `warnings` member is still content — it must come back untouched.
+ * Whether an operation's response with this status is a JSON envelope this
+ * layer may re-spell. A file download's body is content, and content that
+ * happens to be JSON with a `warnings` member is still content — it must
+ * come back untouched. The declaration for the actual status is used
+ * (falling back to any 2xx, then `default`), references resolved.
  */
-export function servesJsonEnvelope(operation: OpenAPIV3.OperationObject): boolean {
+export function servesJsonEnvelope(
+  operation: OpenAPIV3.OperationObject,
+  status?: number,
+  components?: OpenAPIV3.ComponentsObject,
+): boolean {
   const responses = operation.responses ?? {};
-  const success = Object.entries(responses).find(([status]) => /^2\d\d$/.test(status))?.[1] ?? responses.default;
-  if (!success || "$ref" in success) return true;
-  const content = success.content;
+  // a known status: its exact declaration, then its range wildcard (`2XX`),
+  // then `default` — never a different status's declaration; no status: any
+  // 2xx, then `default`
+  const declared =
+    status !== undefined
+      ? (responses[String(status)] ?? responses[`${Math.floor(status / 100)}XX`] ?? responses.default)
+      : (Object.entries(responses).find(([code]) => /^2(\d\d|XX)$/i.test(code))?.[1] ?? responses.default);
+  const response = resolveComponent<OpenAPIV3.ResponseObject>(declared, components);
+  if (!response) return true;
+  const content = response.content;
   if (!content || Object.keys(content).length === 0) return true;
   return Object.keys(content).some((mediaType) => /^application\/([a-z.+-]*\+)?json\b/i.test(mediaType));
 }
@@ -153,7 +175,10 @@ function isRef(value: unknown): value is SeeAlsoRef {
   const ref = value as SeeAlsoRef;
   const strings = (map: unknown) =>
     map === undefined ||
-    (typeof map === "object" && map !== null && Object.values(map).every((v) => typeof v === "string"));
+    (typeof map === "object" &&
+      map !== null &&
+      !Array.isArray(map) &&
+      Object.values(map).every((v) => typeof v === "string"));
   if (!strings(ref.params) || !strings(ref.query)) return false;
   if (ref.op !== undefined) return typeof ref.op === "string" && ref.op !== "";
   return ref.query !== undefined && Object.keys(ref.query).length > 0;
