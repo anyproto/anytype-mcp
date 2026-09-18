@@ -390,7 +390,19 @@ describe("see_also references", () => {
 
     it("returns a body it cannot make sense of unchanged rather than failing the response", () => {
       const poisoned = { warnings: [{ message: "m", hint: "h", see_also: [{ op: "get_object", params: null as never }] }] };
-      expect(() => respellResponse(poisoned, index)).not.toThrow();
+      expect(respellResponse(poisoned, index)).toEqual(poisoned);
+    });
+
+    it("returns the original body when the re-spell itself throws", () => {
+      const issue = { message: "m", hint: "list spaces with GET /v2/spaces", see_also: [{ op: "list_spaces" }] };
+      Object.defineProperty(issue, "path", {
+        enumerable: true,
+        get() {
+          throw new Error("boom");
+        },
+      });
+      const body = { warnings: [issue] };
+      expect(respellResponse(body, index)).toBe(body);
     });
 
     it("passes anything else through unchanged", () => {
