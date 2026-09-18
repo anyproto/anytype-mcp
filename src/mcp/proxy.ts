@@ -6,6 +6,7 @@ import { OpenAPIV3 } from "openapi-types";
 import { HttpClient, HttpClientError } from "../client/http-client";
 import { OpenAPIToMCPConverter } from "../openapi/parser";
 import { determineBaseUrl } from "../utils/base-url";
+import { buildOperationIndex, respellResponse, servesJsonEnvelope, type OperationIndex } from "./see-also";
 import { compactWriteResponse } from "./write-response";
 
 type PathItemObject = OpenAPIV3.PathItemObject & {
@@ -30,6 +31,10 @@ export class MCPProxy {
   private httpClient: HttpClient;
   private tools: Record<string, NewToolDefinition>;
   private openApiLookup: Record<string, OpenAPIV3.OperationObject & { method: string; path: string }>;
+  // operationId → this server's tool, for re-spelling the server's typed
+  // repair hints (see_also) in the tool vocabulary
+  private operationIndex: OperationIndex;
+  private components: OpenAPIV3.ComponentsObject | undefined;
 
   constructor(name: string, openApiSpec: OpenAPIV3.Document) {
     this.server = new Server({ name, version: "1.0.0" }, { capabilities: { tools: {} } });
@@ -38,6 +43,8 @@ export class MCPProxy {
     const { tools, openApiLookup } = converter.convertToMCPTools();
     this.tools = tools;
     this.openApiLookup = openApiLookup;
+    this.operationIndex = buildOperationIndex(openApiLookup, openApiSpec.components);
+    this.components = openApiSpec.components;
     const baseUrl = determineBaseUrl(openApiSpec);
     this.httpClient = new HttpClient(
       {
@@ -96,7 +103,16 @@ export class MCPProxy {
           content: [
             {
               type: "text",
-              text: JSON.stringify(compactWriteResponse(operation, response.data)),
+              // typed repair hints are re-spelled in the tool vocabulary
+              // first; a download's body is content, not an envelope
+              text: JSON.stringify(
+                compactWriteResponse(
+                  operation,
+                  servesJsonEnvelope(operation, response.status, this.components)
+                    ? respellResponse(response.data, this.operationIndex, operation.operationId)
+                    : response.data,
+                ),
+              ),
             },
             ...(Object.keys(metadata).length
               ? [{ type: "text", text: JSON.stringify({ request_metadata: metadata }) }]
@@ -105,7 +121,7 @@ export class MCPProxy {
         };
       } catch (error) {
         if (error instanceof HttpClientError) {
-          const data = error.data ?? {};
+          const data = respellResponse(error.data ?? {}, this.operationIndex, operation.operationId);
           return {
             isError: true,
             content: [
