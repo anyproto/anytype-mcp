@@ -104,6 +104,111 @@ describe("MCPProxy", () => {
       );
     });
 
+    // the server's typed repair hints (see_also) are re-spelled in this
+    // server's tool vocabulary on both response paths — a caller with tools
+    // and no routes must not be told to issue a GET
+    describe("see_also re-spelling", () => {
+      const specWithOps = () =>
+        createMockOpenApiSpec({
+          paths: {
+            "/v2/schemas/ops/{op}": {
+              get: {
+                operationId: "get_op_schema",
+                parameters: [{ name: "op", in: "path", required: true, schema: { type: "string" } }],
+                responses: { "200": { description: "Success" } },
+              },
+            },
+            "/v2/spaces/{space_id}/properties": {
+              get: {
+                operationId: "list_properties",
+                parameters: [{ name: "space_id", in: "path", required: true, schema: { type: "string" } }],
+                responses: { "200": { description: "Success" } },
+              },
+            },
+            "/v2/spaces/{space_id}/files/{file_id}/content": {
+              get: {
+                operationId: "download_file",
+                parameters: [
+                  { name: "space_id", in: "path", required: true, schema: { type: "string" } },
+                  { name: "file_id", in: "path", required: true, schema: { type: "string" } },
+                ],
+                responses: { "200": { description: "bytes", content: { "application/octet-stream": {} } } },
+              },
+            },
+            "/v2/spaces": { get: { operationId: "list_spaces", responses: { "200": { description: "Success" } } } },
+          },
+        });
+
+      it("re-spells an error envelope's issues", async () => {
+        const testProxy = new MCPProxy("test-proxy", specWithOps());
+        const data = {
+          status: 400,
+          code: "validation_failed",
+          message: "invalid set_properties op",
+          issues: [
+            {
+              path: "ops[0]",
+              message: "unknown field",
+              hint: "GET /v2/schemas/ops/set_properties for the op's schema and example",
+              see_also: [{ op: "get_op_schema", params: { op: "set_properties" } }],
+            },
+          ],
+        };
+        (HttpClient.prototype.executeOperation as ReturnType<typeof vi.fn>).mockRejectedValue(
+          Object.assign(new HttpClientError("Bad Request", 400, data), { status: 400, data }),
+        );
+
+        const [, callToolHandler] = getHandlers(testProxy);
+        const result = await callToolHandler({ params: { name: "API-get-op-schema", arguments: { op: "x" } } });
+        const body = JSON.parse(result.content[0].text);
+
+        expect(result.isError).toBe(true);
+        expect(body.issues[0].hint).toBe(`API-get-op-schema {"op":"set_properties"} for the op's schema and example`);
+        expect(body.issues[0].see_also[0].tool).toBe("API-get-op-schema");
+        expect(body.issues[0].see_also[0].args).toEqual({ op: "set_properties" });
+      });
+
+      it("re-spells a success envelope's warnings", async () => {
+        const testProxy = new MCPProxy("test-proxy", specWithOps());
+        (HttpClient.prototype.executeOperation as ReturnType<typeof vi.fn>).mockResolvedValue({
+          ...mockSuccessResponse,
+          data: {
+            data: [],
+            warnings: [
+              {
+                message: "unknown field",
+                hint: "list keys with GET /v2/spaces/s1/properties",
+                see_also: [{ op: "list_properties", params: { space_id: "s1" } }],
+              },
+            ],
+          },
+        });
+
+        const [, callToolHandler] = getHandlers(testProxy);
+        const result = await callToolHandler({ params: { name: "API-list-properties", arguments: { space_id: "s1" } } });
+        const body = JSON.parse(result.content[0].text);
+
+        expect(body.warnings[0].hint).toBe('list keys with API-list-properties {"space_id":"s1"}');
+        expect(body.data).toEqual([]);
+      });
+
+      it("leaves a download's JSON content alone even when it looks like an envelope", async () => {
+        const testProxy = new MCPProxy("test-proxy", specWithOps());
+        const content = { warnings: [{ message: "file contents", hint: "GET /v2/spaces", see_also: [{ op: "list_spaces" }] }] };
+        (HttpClient.prototype.executeOperation as ReturnType<typeof vi.fn>).mockResolvedValue({
+          ...mockSuccessResponse,
+          data: content,
+        });
+
+        const [, callToolHandler] = getHandlers(testProxy);
+        const result = await callToolHandler({
+          params: { name: "API-download-file", arguments: { space_id: "s", file_id: "f" } },
+        });
+
+        expect(JSON.parse(result.content[0].text)).toEqual(content);
+      });
+    });
+
     it("preserves structured API failures and marks them as MCP errors", async () => {
       const data = {
         code: "validation_failed",
