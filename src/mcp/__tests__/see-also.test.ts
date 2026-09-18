@@ -95,6 +95,20 @@ describe("see_also references", () => {
       );
     });
 
+    it("a bound path value is typed by its declared parameter type", () => {
+      const typed = buildOperationIndex({
+        "API-get-thing": {
+          operationId: "get_thing",
+          method: "get",
+          path: "/v2/things/{item}",
+          parameters: [{ name: "item", in: "path", required: true, schema: { type: "integer" } }],
+          responses: {},
+        },
+      });
+      expect(toolSpelling({ op: "get_thing", params: { item: "42" } }, typed)).toBe('API-get-thing {"item":42}');
+      expect(toolSpelling({ op: "get_thing" }, typed)).toBe('API-get-thing {"item":"<item>"}');
+    });
+
     it("an unbound parameter is a placeholder the caller fills", () => {
       expect(toolSpelling({ op: "delete_property", params: { space_id: "sp1" } }, index)).toBe(
         'API-delete-property {"space_id":"sp1","key":"<key>"}',
@@ -224,9 +238,12 @@ describe("see_also references", () => {
       expect(out.hint).toBe('list them with API-list-properties {"space_id":"s"}');
     });
 
-    it("never throws on a malformed reference list", () => {
-      const issue = { message: 5 as unknown as string, hint: "x", see_also: [null, 1, "s", [], { op: 3 as unknown as string }] };
-      expect(() => respellIssue(issue as never, index)).not.toThrow();
+    it("never throws on a malformed reference list, and passes it through", () => {
+      const refs = [null, 1, "s", [], { op: 3 as unknown as string }];
+      const issue = { message: "m", hint: "x", see_also: refs };
+      const out = respellIssue(issue as never, index);
+      expect(out.hint).toBe("x");
+      expect(out.see_also).toEqual(refs);
     });
   });
 

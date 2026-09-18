@@ -121,7 +121,8 @@ export function servesJsonEnvelope(
   const responses = operation.responses ?? {};
   // a known status: its exact declaration, then its range wildcard (`2XX`),
   // then `default` — never a different status's declaration; no status: any
-  // 2xx, then `default`
+  // 2xx, then `default`. No declaration, or one without content, counts as
+  // JSON: the envelope is the norm and the gate exists for declared bytes.
   const declared =
     status !== undefined
       ? (responses[String(status)] ?? responses[`${Math.floor(status / 100)}XX`] ?? responses.default)
@@ -211,7 +212,8 @@ export function toolArgs(ref: SeeAlsoRef, index: OperationIndex, currentOp?: str
   if (ref.op && operation) {
     for (const match of operation.path.matchAll(PLACEHOLDER)) {
       const name = match[1];
-      args[name] = ref.params?.[name] ?? `<${name}>`;
+      const bound = ref.params?.[name];
+      args[name] = bound === undefined ? `<${name}>` : argValue(bound, operation.parameters[name]);
     }
   }
   for (const [name, value] of Object.entries(ref.query ?? {})) {
