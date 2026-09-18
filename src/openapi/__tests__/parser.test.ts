@@ -452,8 +452,8 @@ describe("OpenAPIToMCPConverter", () => {
       const getPetMethod = tools.API.methods.find((m) => m.name === "getPet");
       expect(getPetMethod).toBeDefined();
 
-      // We just check that the description includes the error references now.
-      expect(getPetMethod?.description).toContain("404: The specified resource was not found");
+      // Error details are returned when calls fail instead of repeated in every tool.
+      expect(getPetMethod?.description).toBe("Get a pet by ID");
     });
 
     it("handles recursive schema references without expanding them", () => {

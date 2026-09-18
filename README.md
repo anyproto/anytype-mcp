@@ -137,6 +137,57 @@ Here are some examples of how you can interact with your Anytype:
 - "Create a second one with title 'Dive deep into LLMs' with due date in 3 days and assign it to me"
 - "Now create a collection with the title "Tasks for this week" and add the two tasks to that list. Set due date of the first one to 10 days from now"
 
+## Tool behavior and API versions
+
+The server loads one OpenAPI document at startup. With the standard configuration it tries `/v2/docs/openapi.json` first. If that endpoint returns 404 or 410, it falls back to `/docs/openapi.json` on the same server, where older apps serve v1. This selects v2 whenever available while supporting apps that only have the legacy API:
+
+```json
+"args": ["-y", "@anyproto/anytype-mcp"]
+```
+
+To explicitly use the legacy v1 API, select its versioned spec:
+
+```json
+"args": ["-y", "@anyproto/anytype-mcp", "run", "http://127.0.0.1:31009/v1/docs/openapi.json"]
+```
+
+The versioned `/v2/docs/openapi.json` URL also remains available for explicitly selecting v2.
+
+Explicit spec URLs and local files are used exactly as supplied, without fallback. Authentication failures, server errors, connection failures, and malformed JSON also fail startup instead of selecting another API. The wrapper uses the routes declared in the selected document without rewriting their version prefixes.
+
+Discovery runs once per MCP process. Tool calls reuse the parsed specification and HTTP client without fetching OpenAPI again. Restart the MCP server after updating Anytype to discover a newly available API version; no persistent spec cache is used.
+
+Tool descriptions contain operation guidance; API errors are returned when calls fail, with `isError: true`, HTTP status when available, and the API's code, message, issues, and hints.
+
+Successful v1 object creation, updates, deletion, and chat creation return a compact `object` receipt with its ID, space ID, name, archive state, and type identity when available. The wrapper omits echoed markdown, snippets, property values, icons, and full type definitions. It preserves warnings, generated IDs, and etag/retry metadata. Read the object to retrieve its content when needed. v2 already returns compact create/edit receipts, which are passed through unchanged; reads, searches, and errors also keep their full API responses.
+
+The shared tool policy controls inputs and request routing:
+
+- `Authorization` and `Anytype-Version` come from `OPENAPI_MCP_HEADERS`.
+- `expected_etag` maps to `If-Match`. Use the etag from a previous read to prevent overwriting a changed object. The wrapper does not retry a failed precondition or remove it. Response etags are returned in a separate `request_metadata` text block when available.
+- `request_key` maps to `Idempotency-Key` on endpoints that declare that header. Omit it for a new write; the wrapper generates a unique key and returns it in `request_metadata` or an error's `request_key`. Reuse it only to retry the same write. Separate calls get different generated keys, even with identical documents. There are no automatic retries. A global `Idempotency-Key` in `OPENAPI_MCP_HEADERS` is rejected.
+- Existing callers can still use the exact legacy `If-Match` and `Idempotency-Key` argument names. They are not advertised alongside the new names. Conflicting alias values are rejected.
+- Pagination, field selection, `dry_run`, `create_missing_options`, and schema discovery remain available.
+- Pairing and API-key management are excluded. v2 `auth_whoami` remains available for inspecting the current credential's permissions; its response does not contain the bearer token.
+- Event-stream tools are excluded because they do not produce a bounded tool result. Use message-listing tools to retrieve chat messages.
+- File downloads are supported through a binary adapter. The tool streams bytes to a private temporary directory and returns `path`, `filename`, `media_type`, and `size`. The path is local to the machine/container running MCP. Successful files remain there until removed or cleaned up by the operating system; interrupted downloads are removed. Range and cache headers are not model inputs.
+
+Known inputs with HTTP meanings are matched by parameter location, so a document's own fields are preserved. Open-ended JSON documents use the `body` argument. Objects with declared fields use flat arguments. The existing omission of flattened `filters` fields and the `FilterExpression` schema fallback remain separate limitations; this cleanup does not restore filter-schema support.
+
+Duplicate final tool names fail startup with both routes identified. Select separate v1/v2 specs instead of merging operations with overlapping names.
+
+Set `ANYTYPE_MCP_DEBUG=1` for concise operation names, response status, and timing on stderr. Arguments, authorization headers, payloads, and entire operation tables are not logged.
+
+### Measuring tool definitions
+
+```bash
+bun run measure-tools
+# Or inspect a different local OpenAPI document:
+bun run measure-tools ./path/to/openapi.json
+```
+
+The default command compares fixed v1 and v2 fixtures. It reports tool count, serialized characters, and UTF-8 bytes, not model-specific token counts.
+
 ## Development
 
 ### Installation from Source

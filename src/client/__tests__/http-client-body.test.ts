@@ -3,7 +3,7 @@ import { URL } from "node:url";
 import type { OpenAPIV3 } from "openapi-types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OpenAPIToMCPConverter } from "../../openapi/parser";
-import { HttpClient } from "../http-client";
+import { HttpClient, HttpClientError } from "../http-client";
 
 describe("MCP JSON request bodies", () => {
   beforeEach(() => {
@@ -12,12 +12,15 @@ describe("MCP JSON request bodies", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   });
 
   async function setup(
     schema: OpenAPIV3.SchemaObject | OpenAPIV3.ReferenceObject,
     components: OpenAPIV3.ComponentsObject = {},
     referenceRequestBody = false,
+    headers: Record<string, string> = {},
+    extraParameters: OpenAPIV3.ParameterObject[] = [],
   ) {
     const requestBody: OpenAPIV3.RequestBodyObject = {
       required: true,
@@ -45,6 +48,7 @@ describe("MCP JSON request bodies", () => {
               { name: "ids", in: "query", schema: { type: "string" } },
               { name: "Idempotency-Key", in: "header", schema: { type: "string" } },
               { $ref: "#/components/parameters/IfMatch" },
+              ...extraParameters,
             ],
             requestBody: referenceRequestBody ? { $ref: "#/components/requestBodies/Document" } : requestBody,
             responses: { "200": { description: "OK" } },
@@ -54,7 +58,7 @@ describe("MCP JSON request bodies", () => {
     };
     const { zip } = new OpenAPIToMCPConverter(spec).convertToMCPTools();
     const { openApi: operation, mcp: tool } = zip["API-write-document"];
-    const client = new HttpClient({ baseUrl: "http://localhost:31009" }, spec);
+    const client = new HttpClient({ baseUrl: "http://localhost:31009", headers }, spec);
     const api = await client["api"];
     // Capture the serialized request after the real OpenAPI client and Axios
     // have mapped parameters and transformed the payload, without making HTTP calls.
@@ -68,6 +72,160 @@ describe("MCP JSON request bodies", () => {
     api.defaults.adapter = adapter;
     return { client, operation, tool, adapter, api };
   }
+
+  it("routes concise aliases and accepts matching legacy values", async () => {
+    const { client, operation, tool, adapter } = await setup({ type: "object" });
+    expect(tool.inputSchema.properties).toHaveProperty("expected_etag");
+    expect(tool.inputSchema.properties).toHaveProperty("request_key");
+    expect(tool.inputSchema.properties).not.toHaveProperty("If-Match");
+    expect(tool.inputSchema.properties).not.toHaveProperty("Idempotency-Key");
+    await client.executeOperation(operation, {
+      space_id: "space-1",
+      body: { name: "Test" },
+      expected_etag: '"revision"',
+      request_key: "retry-1",
+      "Idempotency-Key": "retry-1",
+    });
+    const config = adapter.mock.calls[0][0];
+    expect(JSON.parse(config.data)).toEqual({ name: "Test" });
+    expect(config.headers.get("If-Match")).toBe('"revision"');
+    expect(config.headers.get("Idempotency-Key")).toBe("retry-1");
+  });
+
+  it.each([
+    { expected_etag: "a", "If-Match": "b" },
+    { request_key: "a", "Idempotency-Key": "b" },
+  ])("rejects conflicting aliases before sending a request", async (aliases) => {
+    const { client, operation, adapter } = await setup({ type: "object" });
+    await expect(client.executeOperation(operation, { space_id: "space-1", body: {}, ...aliases })).rejects.toThrow(
+      "Conflicting values",
+    );
+    expect(adapter).not.toHaveBeenCalled();
+  });
+
+  it("uses a different generated key for separate identical writes", async () => {
+    const { client, operation, adapter } = await setup({ type: "object" });
+    const args = { space_id: "space-1", body: { name: "Test" } };
+    const first = await client.executeOperation(operation, args);
+    const second = await client.executeOperation(operation, args);
+    expect(first.requestKey).toBeTruthy();
+    expect(first.requestKey).not.toBe(second.requestKey);
+    expect(adapter.mock.calls.map(([config]) => config.headers.get("Idempotency-Key"))).toEqual([
+      first.requestKey,
+      second.requestKey,
+    ]);
+    expect(args).not.toHaveProperty("request_key");
+  });
+
+  it("reuses a prepared key when a transport interceptor retries the same request", async () => {
+    const { client, operation, adapter, api } = await setup({ type: "object" });
+    let firstKey: unknown;
+    adapter.mockImplementationOnce(async (config) => {
+      firstKey = config.headers.get("Idempotency-Key");
+      throw Object.assign(new Error("Temporary connection failure"), { config });
+    });
+    api.interceptors.response.use(undefined, (error) => api.request(error.config));
+
+    const response = await client.executeOperation(operation, { space_id: "space-1", body: { name: "Test" } });
+
+    expect(adapter).toHaveBeenCalledTimes(2);
+    expect(response.requestKey).toBe(firstKey);
+    expect(adapter.mock.calls[1][0].headers.get("Idempotency-Key")).toBe(firstKey);
+  });
+
+  it("returns a retry key on ambiguous transport failures without automatically retrying", async () => {
+    const { client, operation, adapter } = await setup({ type: "object" });
+    adapter.mockRejectedValueOnce(new Error("Connection lost"));
+    let failure: HttpClientError | undefined;
+    try {
+      await client.executeOperation(operation, { space_id: "space-1", body: { name: "Test" } });
+    } catch (error) {
+      expect(error).toBeInstanceOf(HttpClientError);
+      failure = error as HttpClientError;
+    }
+    expect(adapter).toHaveBeenCalledOnce();
+    expect(failure?.data).toMatchObject({ code: "transport_error" });
+    expect(failure?.requestKey).toBeTruthy();
+    await client.executeOperation(operation, {
+      space_id: "space-1",
+      body: { name: "Test" },
+      request_key: failure!.requestKey,
+    });
+    expect(adapter.mock.calls[1][0].headers.get("Idempotency-Key")).toBe(failure!.requestKey);
+  });
+
+  it("preserves a stale-etag error instead of retrying an unconditional update", async () => {
+    const { client, operation, adapter } = await setup({ type: "object" });
+    const details = {
+      code: "etag_mismatch",
+      message: "The object changed",
+      issues: [{ path: "/expected_etag" }],
+      hint: "Read it again",
+    };
+    adapter.mockRejectedValueOnce({
+      response: { status: 412, statusText: "Precondition Failed", data: details, headers: { etag: '"new"' } },
+    });
+    await expect(
+      client.executeOperation(operation, { space_id: "space-1", body: {}, expected_etag: '"old"' }),
+    ).rejects.toMatchObject({
+      status: 412,
+      data: details,
+      requestKey: expect.any(String),
+    });
+    expect(adapter).toHaveBeenCalledOnce();
+    expect(adapter.mock.calls[0][0].headers.get("If-Match")).toBe('"old"');
+  });
+
+  it("uses configured headers and omits transport-only arguments from flat bodies", async () => {
+    const { client, operation, adapter } = await setup(
+      { type: "object", properties: { name: { type: "string" } } },
+      {},
+      false,
+      { Authorization: "Bearer configured", "Anytype-Version": "2025-11-08" },
+      ["Authorization", "Anytype-Version", "Range"].map((name) => ({ name, in: "header", schema: { type: "string" } })),
+    );
+    await client.executeOperation(operation, {
+      space_id: "space-1",
+      name: "Test",
+      Authorization: "Bearer injected",
+      "Anytype-Version": "other",
+      Range: "bytes=0-10",
+    });
+    const config = adapter.mock.calls[0][0];
+    expect(JSON.parse(config.data)).toEqual({ name: "Test" });
+    expect(config.headers.get("Authorization")).toBe("Bearer configured");
+    expect(config.headers.get("Anytype-Version")).toBe("2025-11-08");
+    expect(config.headers.has("Range")).toBe(false);
+  });
+
+  it("reports missing required configuration-owned headers", async () => {
+    const { client, operation, adapter } = await setup({ type: "object" }, {}, false, {}, [
+      { name: "Anytype-Version", in: "header", required: true, schema: { type: "string" } },
+    ]);
+    await expect(client.executeOperation(operation, { space_id: "space-1", body: {} })).rejects.toThrow(
+      "must be set in OPENAPI_MCP_HEADERS",
+    );
+    expect(adapter).not.toHaveBeenCalled();
+  });
+
+  it("rejects a globally configured idempotency key", async () => {
+    await expect(setup({ type: "object" }, {}, false, { "idempotency-key": "same-for-every-write" })).rejects.toThrow(
+      "global Idempotency-Key",
+    );
+  });
+
+  it("logs only request metadata when debug output is enabled", async () => {
+    vi.stubEnv("ANYTYPE_MCP_DEBUG", "1");
+    const { client, operation } = await setup({ type: "object" });
+    await client.executeOperation(operation, {
+      space_id: "private-space",
+      body: { secret: "private-content" },
+      request_key: "private-retry-key",
+    });
+    expect(console.error).toHaveBeenCalledWith("[anytype-mcp] request", { operationId: "write_document" });
+    const logs = JSON.stringify(vi.mocked(console.error).mock.calls);
+    expect(logs).not.toContain("private-");
+  });
 
   it.each([
     { name: "AnyBlock type", body: { formatVersion: "2.0", kind: "object_type", properties: { name: "Tomato" } } },

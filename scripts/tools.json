@@ -4,9 +4,8 @@
       "methods": [
         {
           "name": "search-global",
-          "description": "Search objects across all spaces\nError Responses:\n401: Unauthorized\n500: Internal server error",
+          "description": "Search objects across all spaces",
           "inputSchema": {
-            "$defs": {},
             "type": "object",
             "properties": {
               "offset": {
@@ -380,15 +379,13 @@
               }
             },
             "additionalProperties": true,
-            "$defs": {},
             "description": "The list of objects matching the search criteria"
           }
         },
         {
           "name": "list-spaces",
-          "description": "List spaces\nError Responses:\n401: Unauthorized\n500: Internal server error",
+          "description": "List spaces",
           "inputSchema": {
-            "$defs": {},
             "type": "object",
             "properties": {
               "offset": {
@@ -489,15 +486,13 @@
               }
             },
             "additionalProperties": true,
-            "$defs": {},
             "description": "The list of spaces accessible by the authenticated user"
           }
         },
         {
           "name": "create-space",
-          "description": "Create space\nError Responses:\n400: Bad request\n401: Unauthorized\n429: Rate limit exceeded\n500: Internal server error",
+          "description": "Create space",
           "inputSchema": {
-            "$defs": {},
             "type": "object",
             "properties": {
               "description": {
@@ -571,15 +566,13 @@
               }
             },
             "additionalProperties": true,
-            "$defs": {},
             "description": "The created space"
           }
         },
         {
           "name": "get-space",
-          "description": "Get space\nError Responses:\n401: Unauthorized\n404: Space not found\n500: Internal server error",
+          "description": "Get space",
           "inputSchema": {
-            "$defs": {},
             "type": "object",
             "properties": {
               "space_id": {
@@ -649,15 +642,13 @@
               }
             },
             "additionalProperties": true,
-            "$defs": {},
             "description": "The created space"
           }
         },
         {
           "name": "update-space",
-          "description": "Update space\nError Responses:\n400: Bad request\n401: Unauthorized\n403: Forbidden\n404: Space not found\n429: Rate limit exceeded\n500: Internal server error",
+          "description": "Update space",
           "inputSchema": {
-            "$defs": {},
             "type": "object",
             "properties": {
               "space_id": {
@@ -735,15 +726,13 @@
               }
             },
             "additionalProperties": true,
-            "$defs": {},
             "description": "The created space"
           }
         },
         {
           "name": "add-list-objects",
-          "description": "Add objects to list\nError Responses:\n400: Bad request\n401: Unauthorized\n404: Not found\n429: Rate limit exceeded\n500: Internal server error",
+          "description": "Add objects to list",
           "inputSchema": {
-            "$defs": {},
             "type": "object",
             "properties": {
               "space_id": {
@@ -769,15 +758,13 @@
           },
           "outputSchema": {
             "type": "string",
-            "$defs": {},
             "description": "Objects added successfully"
           }
         },
         {
           "name": "remove-list-object",
-          "description": "Remove object from list\nError Responses:\n400: Bad request\n401: Unauthorized\n404: Not found\n429: Rate limit exceeded\n500: Internal server error",
+          "description": "Remove object from list",
           "inputSchema": {
-            "$defs": {},
             "type": "object",
             "properties": {
               "space_id": {
@@ -801,15 +788,13 @@
           },
           "outputSchema": {
             "type": "string",
-            "$defs": {},
             "description": "Objects removed successfully"
           }
         },
         {
           "name": "get-list-views",
-          "description": "Get list views\nError Responses:\n401: Unauthorized\n404: Not found\n500: Internal server error",
+          "description": "Get list views",
           "inputSchema": {
-            "$defs": {},
             "type": "object",
             "properties": {
               "space_id": {
@@ -995,15 +980,13 @@
               }
             },
             "additionalProperties": true,
-            "$defs": {},
             "description": "The list of views associated with the specified list"
           }
         },
         {
           "name": "get-list-objects",
-          "description": "Get objects in list\nError Responses:\n401: Unauthorized\n404: Not found\n500: Internal server error",
+          "description": "Get objects in list",
           "inputSchema": {
-            "$defs": {},
             "type": "object",
             "properties": {
               "space_id": {
@@ -1354,15 +1337,13 @@
               }
             },
             "additionalProperties": true,
-            "$defs": {},
             "description": "The list of objects matching the search criteria"
           }
         },
         {
           "name": "list-members",
-          "description": "List members\nError Responses:\n401: Unauthorized\n500: Internal server error",
+          "description": "List members",
           "inputSchema": {
-            "$defs": {},
             "type": "object",
             "properties": {
               "space_id": {
@@ -1483,15 +1464,13 @@
               }
             },
             "additionalProperties": true,
-            "$defs": {},
             "description": "The list of members in the space"
           }
         },
         {
           "name": "get-member",
-          "description": "Get member\nError Responses:\n401: Unauthorized\n404: Member not found\n500: Internal server error",
+          "description": "Get member",
           "inputSchema": {
-            "$defs": {},
             "type": "object",
             "properties": {
               "space_id": {
@@ -1580,15 +1559,13 @@
               }
             },
             "additionalProperties": true,
-            "$defs": {},
             "description": "The member details"
           }
         },
         {
           "name": "list-objects",
-          "description": "List objects\nError Responses:\n401: Unauthorized\n500: Internal server error",
+          "description": "List objects",
           "inputSchema": {
-            "$defs": {},
             "type": "object",
             "properties": {
               "space_id": {
@@ -1930,15 +1907,13 @@
               }
             },
             "additionalProperties": true,
-            "$defs": {},
             "description": "The list of objects matching the search criteria"
           }
         },
         {
           "name": "create-object",
-          "description": "Create object\nError Responses:\n400: Bad request\n401: Unauthorized\n429: Rate limit exceeded\n500: Internal server error",
+          "description": "Create object",
           "inputSchema": {
-            "$defs": {},
             "type": "object",
             "properties": {
               "space_id": {
@@ -2391,15 +2366,13 @@
               }
             },
             "additionalProperties": true,
-            "$defs": {},
             "description": "The created object"
           }
         },
         {
           "name": "delete-object",
-          "description": "Delete object\nError Responses:\n401: Unauthorized\n403: Forbidden\n404: Resource not found\n410: Resource deleted\n429: Rate limit exceeded\n500: Internal server error",
+          "description": "Delete object",
           "inputSchema": {
-            "$defs": {},
             "type": "object",
             "properties": {
               "space_id": {
@@ -2714,15 +2687,13 @@
               }
             },
             "additionalProperties": true,
-            "$defs": {},
             "description": "The created object"
           }
         },
         {
           "name": "get-object",
-          "description": "Get object\nError Responses:\n401: Unauthorized\n404: Resource not found\n410: Resource deleted\n500: Internal server error",
+          "description": "Get object",
           "inputSchema": {
-            "$defs": {},
             "type": "object",
             "properties": {
               "space_id": {
@@ -3045,15 +3016,13 @@
               }
             },
             "additionalProperties": true,
-            "$defs": {},
             "description": "The created object"
           }
         },
         {
           "name": "update-object",
-          "description": "Update object\nError Responses:\n400: Bad request\n401: Unauthorized\n404: Resource not found\n410: Resource deleted\n429: Rate limit exceeded\n500: Internal server error",
+          "description": "Update object",
           "inputSchema": {
-            "$defs": {},
             "type": "object",
             "properties": {
               "space_id": {
@@ -3506,15 +3475,13 @@
               }
             },
             "additionalProperties": true,
-            "$defs": {},
             "description": "The created object"
           }
         },
         {
           "name": "list-properties",
-          "description": "List properties\nError Responses:\n401: Unauthorized\n500: Internal server error",
+          "description": "List properties",
           "inputSchema": {
-            "$defs": {},
             "type": "object",
             "properties": {
               "space_id": {
@@ -3608,15 +3575,13 @@
               }
             },
             "additionalProperties": true,
-            "$defs": {},
             "description": "The list of properties in the specified space"
           }
         },
         {
           "name": "create-property",
-          "description": "Create property\nError Responses:\n400: Bad request\n401: Unauthorized\n429: Rate limit exceeded\n500: Internal server error",
+          "description": "Create property",
           "inputSchema": {
-            "$defs": {},
             "type": "object",
             "properties": {
               "space_id": {
@@ -3738,15 +3703,13 @@
               }
             },
             "additionalProperties": true,
-            "$defs": {},
             "description": "The created property"
           }
         },
         {
           "name": "delete-property",
-          "description": "Delete property\nError Responses:\n401: Unauthorized\n403: Forbidden\n404: Resource not found\n410: Resource deleted\n429: Rate limit exceeded\n500: Internal server error",
+          "description": "Delete property",
           "inputSchema": {
-            "$defs": {},
             "type": "object",
             "properties": {
               "space_id": {
@@ -3808,15 +3771,13 @@
               }
             },
             "additionalProperties": true,
-            "$defs": {},
             "description": "The created property"
           }
         },
         {
           "name": "get-property",
-          "description": "Get property\nError Responses:\n401: Unauthorized\n404: Resource not found\n410: Resource deleted\n500: Internal server error",
+          "description": "Get property",
           "inputSchema": {
-            "$defs": {},
             "type": "object",
             "properties": {
               "space_id": {
@@ -3878,15 +3839,13 @@
               }
             },
             "additionalProperties": true,
-            "$defs": {},
             "description": "The created property"
           }
         },
         {
           "name": "update-property",
-          "description": "Update property\nError Responses:\n400: Bad request\n401: Unauthorized\n403: Forbidden\n404: Resource not found\n410: Resource deleted\n429: Rate limit exceeded\n500: Internal server error",
+          "description": "Update property",
           "inputSchema": {
-            "$defs": {},
             "type": "object",
             "properties": {
               "space_id": {
@@ -3957,15 +3916,13 @@
               }
             },
             "additionalProperties": true,
-            "$defs": {},
             "description": "The created property"
           }
         },
         {
           "name": "list-tags",
-          "description": "List tags\nError Responses:\n401: Unauthorized\n404: Property not found\n500: Internal server error",
+          "description": "List tags",
           "inputSchema": {
-            "$defs": {},
             "type": "object",
             "properties": {
               "space_id": {
@@ -4053,15 +4010,13 @@
               }
             },
             "additionalProperties": true,
-            "$defs": {},
             "description": "The list of tags"
           }
         },
         {
           "name": "create-tag",
-          "description": "Create tag\nError Responses:\n400: Bad request\n401: Unauthorized\n429: Rate limit exceeded\n500: Internal server error",
+          "description": "Create tag",
           "inputSchema": {
-            "$defs": {},
             "type": "object",
             "properties": {
               "space_id": {
@@ -4148,15 +4103,13 @@
               }
             },
             "additionalProperties": true,
-            "$defs": {},
             "description": "The created tag"
           }
         },
         {
           "name": "delete-tag",
-          "description": "Delete tag\nError Responses:\n401: Unauthorized\n403: Forbidden\n404: Resource not found\n410: Resource deleted\n429: Rate limit exceeded\n500: Internal server error",
+          "description": "Delete tag",
           "inputSchema": {
-            "$defs": {},
             "type": "object",
             "properties": {
               "space_id": {
@@ -4222,15 +4175,13 @@
               }
             },
             "additionalProperties": true,
-            "$defs": {},
             "description": "The created tag"
           }
         },
         {
           "name": "get-tag",
-          "description": "Get tag\nError Responses:\n401: Unauthorized\n404: Resource not found\n410: Resource deleted\n500: Internal server error",
+          "description": "Get tag",
           "inputSchema": {
-            "$defs": {},
             "type": "object",
             "properties": {
               "space_id": {
@@ -4296,15 +4247,13 @@
               }
             },
             "additionalProperties": true,
-            "$defs": {},
             "description": "The created tag"
           }
         },
         {
           "name": "update-tag",
-          "description": "Update tag\nError Responses:\n400: Bad request\n401: Unauthorized\n403: Forbidden\n404: Resource not found\n410: Resource deleted\n429: Rate limit exceeded\n500: Internal server error",
+          "description": "Update tag",
           "inputSchema": {
-            "$defs": {},
             "type": "object",
             "properties": {
               "space_id": {
@@ -4394,15 +4343,13 @@
               }
             },
             "additionalProperties": true,
-            "$defs": {},
             "description": "The created tag"
           }
         },
         {
           "name": "search-space",
-          "description": "Search objects within a space\nError Responses:\n401: Unauthorized\n500: Internal server error",
+          "description": "Search objects within a space",
           "inputSchema": {
-            "$defs": {},
             "type": "object",
             "properties": {
               "space_id": {
@@ -4782,15 +4729,13 @@
               }
             },
             "additionalProperties": true,
-            "$defs": {},
             "description": "The list of objects matching the search criteria"
           }
         },
         {
           "name": "list-types",
-          "description": "List types\nError Responses:\n401: Unauthorized\n500: Internal server error",
+          "description": "List types",
           "inputSchema": {
-            "$defs": {},
             "type": "object",
             "properties": {
               "space_id": {
@@ -4951,15 +4896,13 @@
               }
             },
             "additionalProperties": true,
-            "$defs": {},
             "description": "The list of types"
           }
         },
         {
           "name": "create-type",
-          "description": "Create type\nError Responses:\n400: Bad request\n401: Unauthorized\n429: Rate limit exceeded\n500: Internal server error",
+          "description": "Create type",
           "inputSchema": {
-            "$defs": {},
             "type": "object",
             "properties": {
               "space_id": {
@@ -5166,15 +5109,13 @@
               }
             },
             "additionalProperties": true,
-            "$defs": {},
             "description": "The created type"
           }
         },
         {
           "name": "delete-type",
-          "description": "Delete type\nError Responses:\n401: Unauthorized\n403: Forbidden\n404: Resource not found\n410: Resource deleted\n429: Rate limit exceeded\n500: Internal server error",
+          "description": "Delete type",
           "inputSchema": {
-            "$defs": {},
             "type": "object",
             "properties": {
               "space_id": {
@@ -5303,15 +5244,13 @@
               }
             },
             "additionalProperties": true,
-            "$defs": {},
             "description": "The created type"
           }
         },
         {
           "name": "get-type",
-          "description": "Get type\nError Responses:\n401: Unauthorized\n404: Resource not found\n410: Resource deleted\n500: Internal server error",
+          "description": "Get type",
           "inputSchema": {
-            "$defs": {},
             "type": "object",
             "properties": {
               "space_id": {
@@ -5440,15 +5379,13 @@
               }
             },
             "additionalProperties": true,
-            "$defs": {},
             "description": "The created type"
           }
         },
         {
           "name": "update-type",
-          "description": "Update type\nError Responses:\n400: Bad request\n401: Unauthorized\n404: Resource not found\n410: Resource deleted\n429: Rate limit exceeded\n500: Internal server error",
+          "description": "Update type",
           "inputSchema": {
-            "$defs": {},
             "type": "object",
             "properties": {
               "space_id": {
@@ -5657,15 +5594,13 @@
               }
             },
             "additionalProperties": true,
-            "$defs": {},
             "description": "The created type"
           }
         },
         {
           "name": "list-templates",
-          "description": "List templates\nError Responses:\n401: Unauthorized\n500: Internal server error",
+          "description": "List templates",
           "inputSchema": {
-            "$defs": {},
             "type": "object",
             "properties": {
               "space_id": {
@@ -6012,15 +5947,13 @@
               }
             },
             "additionalProperties": true,
-            "$defs": {},
             "description": "The list of objects matching the search criteria"
           }
         },
         {
           "name": "get-template",
-          "description": "Get template\nError Responses:\n401: Unauthorized\n404: Resource not found\n410: Resource deleted\n500: Internal server error",
+          "description": "Get template",
           "inputSchema": {
-            "$defs": {},
             "type": "object",
             "properties": {
               "space_id": {
@@ -6340,7 +6273,6 @@
               }
             },
             "additionalProperties": true,
-            "$defs": {},
             "description": "The requested template"
           }
         }
