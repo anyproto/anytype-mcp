@@ -14,7 +14,9 @@ const v2 = JSON.parse(
 describe("fixed Anytype tool manifests", () => {
   it.each([
     { version: "v1", spec: v1, count: 49, maxCharacters: 33500 },
-    { version: "v2", spec: v2, count: 46, maxCharacters: 20400 },
+    // v2 tools carry each operation's description beside its summary (the
+    // server bounds those to 400 characters); the budget grew with them
+    { version: "v2", spec: v2, count: 46, maxCharacters: 27000 },
   ])("keeps the $version tool list compact and usable", ({ version, spec, count, maxCharacters }) => {
     const { tools, openApiLookup } = new OpenAPIToMCPConverter(spec as OpenAPIV3.Document).convertToMCPTools();
     const listed = tools.API.methods.map(({ name, description, inputSchema }) => ({

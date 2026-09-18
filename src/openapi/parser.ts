@@ -556,7 +556,19 @@ export class OpenAPIToMCPConverter {
       }
     }
 
-    let description = operation.summary || operation.description || "";
+    // the summary names the tool; a v2 operation's description is its own
+    // rule (a limitation, a semantics note — the server bounds it to 400
+    // characters) and reaches the caller only from here: dropping it when a
+    // summary exists dropped every such rule (round-four eval R4-7, R4-10).
+    // v1 descriptions are unbounded and stay out of the listing.
+    const parts = [operation.summary];
+    if (path.startsWith("/v2/")) {
+      parts.push(operation.description);
+    }
+    let description = parts
+      .filter((part): part is string => typeof part === "string" && part.trim() !== "")
+      .map((part) => part.trim().replace(/\.$/, ""))
+      .join(". ");
     if (isFileDownload({ ...operation, method })) {
       description += ". Saves locally and returns path, filename, media_type, and size in bytes.";
     }
