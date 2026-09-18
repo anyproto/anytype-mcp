@@ -298,6 +298,13 @@ describe("see_also references", () => {
       expect(servesJsonEnvelope({ responses: {} })).toBe(true);
     });
 
+    it("accepts vendor and parameterised JSON media types like the tool converter does", () => {
+      for (const mediaType of ["application/vnd.anytype.v2+json", "application/problem+json", "application/json; charset=utf-8"]) {
+        expect(servesJsonEnvelope({ responses: { "200": { description: "ok", content: { [mediaType]: {} } } } }, 200)).toBe(true);
+      }
+      expect(servesJsonEnvelope({ responses: { "200": { description: "ok", content: { "application/jsonl": {} } } } }, 200)).toBe(false);
+    });
+
     it("is false for a download", () => {
       expect(
         servesJsonEnvelope({ responses: { "200": { description: "bytes", content: { "application/octet-stream": {} } } } }),
