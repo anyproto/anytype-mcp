@@ -1593,3 +1593,50 @@ describe("OpenAPIToMCPConverter - Additional Complex Tests", () => {
     expect(openApiLookup).toEqual(expected.openApiLookup);
   });
 });
+
+describe("operation ids in the document's prose", () => {
+  const spec: OpenAPIV3.Document = {
+    openapi: "3.0.0",
+    info: { title: "t", version: "1" },
+    paths: {
+      "/v2/schemas/{kind}": {
+        get: {
+          operationId: "get_schema",
+          summary: "Get a schema",
+          parameters: [{ name: "kind", in: "path", required: true, schema: { type: "string" } }],
+          responses: { "200": { description: "ok" } },
+        },
+      },
+      "/v2/spaces/{space_id}/templates": {
+        post: {
+          operationId: "create_template",
+          summary: "Create a template",
+          description: "Read get_schema first; validate is a word",
+          parameters: [{ name: "space_id", in: "path", required: true, schema: { type: "string" } }],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  description: "an AnyBlock document; its schema comes from get_schema with kind template",
+                },
+              },
+            },
+          },
+          responses: { "201": { description: "created" } },
+        },
+      },
+    },
+  };
+
+  it("are re-spelled as this server's tool names in the listing", () => {
+    const converter = new OpenAPIToMCPConverter(spec);
+    const { tools } = converter.convertToMCPTools();
+    const create = tools.API.methods.find((m) => m.name === "create-template")!;
+    expect(create.description).toBe("Create a template. Read API-get-schema first; validate is a word");
+    expect((create.inputSchema.properties!.body as IJsonSchema).description).toBe(
+      "an AnyBlock document; its schema comes from API-get-schema with kind template",
+    );
+  });
+});

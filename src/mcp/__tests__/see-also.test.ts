@@ -117,15 +117,18 @@ describe("see_also references", () => {
 
     it("a query flag is typed by the operation's declared parameter type", () => {
       expect(
-        toolSpelling({ op: "get_object", params: { space_id: "sp1", object_id: "o1" }, query: { outline: "true" } }, index),
+        toolSpelling(
+          { op: "get_object", params: { space_id: "sp1", object_id: "o1" }, query: { outline: "true" } },
+          index,
+        ),
       ).toBe('API-get-object {"space_id":"sp1","object_id":"o1","outline":true}');
       expect(toolSpelling({ op: "list_objects", params: { space_id: "s" }, query: { limit: "5" } }, index)).toBe(
         'API-list-objects {"space_id":"s","limit":5}',
       );
       // a string parameter that happens to spell a boolean stays a string
-      expect(toolSpelling({ op: "get_object", params: { space_id: "s", object_id: "o" }, query: { ids: "false" } }, index)).toBe(
-        'API-get-object {"space_id":"s","object_id":"o","ids":"false"}',
-      );
+      expect(
+        toolSpelling({ op: "get_object", params: { space_id: "s", object_id: "o" }, query: { ids: "false" } }, index),
+      ).toBe('API-get-object {"space_id":"s","object_id":"o","ids":"false"}');
     });
 
     it("a resend is the extra arguments alone, typed by the operation that produced the issue", () => {
@@ -284,30 +287,48 @@ describe("see_also references", () => {
           },
         },
         {
-          schemas: { LimitAlias: { $ref: "#/components/schemas/Limit" }, Limit: { type: "integer" }, Loop: { $ref: "#/components/schemas/Loop" } },
+          schemas: {
+            LimitAlias: { $ref: "#/components/schemas/Limit" },
+            Limit: { type: "integer" },
+            Loop: { $ref: "#/components/schemas/Loop" },
+          },
         } as never,
       );
-      expect(toolSpelling({ query: { limit: "25", loop: "1" } }, chained, "list_things")).toBe('{"limit":25,"loop":"1"}');
+      expect(toolSpelling({ query: { limit: "25", loop: "1" } }, chained, "list_things")).toBe(
+        '{"limit":25,"loop":"1"}',
+      );
     });
   });
 
   describe("servesJsonEnvelope", () => {
     it("is true for a JSON response, absent content, or absent responses", () => {
-      expect(servesJsonEnvelope({ responses: { "200": { description: "ok", content: { "application/json": {} } } } })).toBe(true);
+      expect(
+        servesJsonEnvelope({ responses: { "200": { description: "ok", content: { "application/json": {} } } } }),
+      ).toBe(true);
       expect(servesJsonEnvelope({ responses: { "200": { description: "ok" } } })).toBe(true);
       expect(servesJsonEnvelope({ responses: {} })).toBe(true);
     });
 
     it("accepts vendor and parameterised JSON media types like the tool converter does", () => {
-      for (const mediaType of ["application/vnd.anytype.v2+json", "application/problem+json", "application/json; charset=utf-8"]) {
-        expect(servesJsonEnvelope({ responses: { "200": { description: "ok", content: { [mediaType]: {} } } } }, 200)).toBe(true);
+      for (const mediaType of [
+        "application/vnd.anytype.v2+json",
+        "application/problem+json",
+        "application/json; charset=utf-8",
+      ]) {
+        expect(
+          servesJsonEnvelope({ responses: { "200": { description: "ok", content: { [mediaType]: {} } } } }, 200),
+        ).toBe(true);
       }
-      expect(servesJsonEnvelope({ responses: { "200": { description: "ok", content: { "application/jsonl": {} } } } }, 200)).toBe(false);
+      expect(
+        servesJsonEnvelope({ responses: { "200": { description: "ok", content: { "application/jsonl": {} } } } }, 200),
+      ).toBe(false);
     });
 
     it("is false for a download", () => {
       expect(
-        servesJsonEnvelope({ responses: { "200": { description: "bytes", content: { "application/octet-stream": {} } } } }),
+        servesJsonEnvelope({
+          responses: { "200": { description: "bytes", content: { "application/octet-stream": {} } } },
+        }),
       ).toBe(false);
     });
 
@@ -396,7 +417,9 @@ describe("see_also references", () => {
     });
 
     it("returns a body it cannot make sense of unchanged rather than failing the response", () => {
-      const poisoned = { warnings: [{ message: "m", hint: "h", see_also: [{ op: "get_object", params: null as never }] }] };
+      const poisoned = {
+        warnings: [{ message: "m", hint: "h", see_also: [{ op: "get_object", params: null as never }] }],
+      };
       expect(respellResponse(poisoned, index)).toEqual(poisoned);
     });
 
@@ -410,6 +433,32 @@ describe("see_also references", () => {
       });
       const body = { warnings: [issue] };
       expect(respellResponse(body, index)).toBe(body);
+    });
+
+    it("re-spells op ids in a served schema's descriptions, and only there", () => {
+      const body = {
+        kind: "add_property",
+        endpoint: "PATCH /v2/spaces/{space_id}/types/{type}",
+        schema: {
+          properties: {
+            property: { type: "string", description: "the property, by the key list_properties serves" },
+          },
+        },
+        example: { op: "add_property", property: "list_properties" },
+      };
+      const out = respellResponse(body, index, "get_op_schema");
+      expect(out.schema.properties.property.description).toBe("the property, by the key API-list-properties serves");
+      expect(out.example).toEqual(body.example);
+      expect(out.endpoint).toBe(body.endpoint);
+      expect(respellResponse(body, index, "get_schema").schema.properties.property.description).toBe(
+        "the property, by the key API-list-properties serves",
+      );
+    });
+
+    it("leaves a description member of ordinary data alone", () => {
+      const body = { id: "x", description: "list_properties is my favourite op", warnings: [] };
+      expect(respellResponse(body, index, "get_object")).toEqual(body);
+      expect(respellResponse(body, index, undefined)).toEqual(body);
     });
 
     it("passes anything else through unchanged", () => {

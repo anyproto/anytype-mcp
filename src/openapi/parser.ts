@@ -2,6 +2,7 @@ import type { Tool } from "@anthropic-ai/sdk/resources/messages/messages";
 import type { JSONSchema7 as IJsonSchema } from "json-schema";
 import type { ChatCompletionTool } from "openai/resources/chat/completions";
 import type { OpenAPIV3, OpenAPIV3_1 } from "openapi-types";
+import { OpVocabulary, respellDescriptions, respellOpIds } from "./op-vocabulary";
 import { getOperationExclusion, getParameterPolicy, isFileDownload } from "./tool-policy";
 
 type NewToolMethod = {
@@ -342,6 +343,18 @@ export class OpenAPIToMCPConverter {
       tools[apiName].methods.push(mcpMethod);
       openApiLookup[fullName] = operation;
       zip[fullName] = { openApi: operation, mcp: mcpMethod };
+    }
+
+    // the document names operations by operationId in its prose (a body
+    // description that says which schema to read first); the listing
+    // names them by tool, once every tool name is known
+    const vocabulary: OpVocabulary = {};
+    for (const [fullName, operation] of Object.entries(openApiLookup)) {
+      if (operation.operationId) vocabulary[operation.operationId] = fullName;
+    }
+    for (const mcpMethod of tools[apiName].methods) {
+      mcpMethod.description = respellOpIds(mcpMethod.description, vocabulary);
+      mcpMethod.inputSchema = respellDescriptions(mcpMethod.inputSchema, vocabulary);
     }
 
     return { tools, openApiLookup, zip };

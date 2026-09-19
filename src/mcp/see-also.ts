@@ -1,5 +1,7 @@
 import { OpenAPIV3 } from "openapi-types";
 
+import { OpVocabulary, respellDescriptions } from "../openapi/op-vocabulary";
+
 /**
  * Typed hint references (`see_also`) — the server names the operations a
  * repair hint points at as data beside the prose, keyed by OpenAPI
@@ -132,7 +134,9 @@ export function servesJsonEnvelope(
   const content = response.content;
   if (!content || Object.keys(content).length === 0) return true;
   // application/json and any +json structured syntax (vendor subtypes may carry digits and dots)
-  return Object.keys(content).some((mediaType) => /^application\/(?:[\w.+-]*\+)?json\s*(?:;|$)/i.test(mediaType.trim()));
+  return Object.keys(content).some((mediaType) =>
+    /^application\/(?:[\w.+-]*\+)?json\s*(?:;|$)/i.test(mediaType.trim()),
+  );
 }
 
 function queryString(query?: Record<string, string>): string {
@@ -286,6 +290,16 @@ export function respellIssue(issue: Issue, index: OperationIndex, currentOp?: st
   };
 }
 
+/** The operations whose response is a schema document: its descriptions are the server's prose, not a caller's data. */
+const SCHEMA_OPERATIONS = new Set(["get_schema", "get_op_schema"]);
+
+/** The op id → tool name vocabulary the index holds. */
+export function vocabulary(index: OperationIndex): OpVocabulary {
+  const vocab: OpVocabulary = {};
+  for (const [op, operation] of Object.entries(index)) vocab[op] = operation.tool;
+  return vocab;
+}
+
 /**
  * Re-spells a server response body in place of its `issues` (an error
  * envelope) and `warnings` (a success envelope). Anything else — and any
@@ -297,7 +311,11 @@ export function respellResponse<T>(data: T, index: OperationIndex, currentOp?: s
   if (!data || typeof data !== "object" || Array.isArray(data)) return data;
   try {
     const body = data as Record<string, unknown>;
-    const out: Record<string, unknown> = { ...body };
+    // a served schema names operations by op id in its field descriptions;
+    // those are the only responses whose descriptions are server prose
+    const out: Record<string, unknown> = SCHEMA_OPERATIONS.has(currentOp ?? "")
+      ? respellDescriptions({ ...body }, vocabulary(index))
+      : { ...body };
     for (const key of ["issues", "warnings"] as const) {
       const list = body[key];
       if (Array.isArray(list)) {
