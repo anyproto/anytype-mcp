@@ -1,6 +1,6 @@
 import { JSONSchema7 as IJsonSchema } from "json-schema";
 import { OpenAPIV3 } from "openapi-types";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { OpenAPIToMCPConverter } from "../parser";
 
 interface ToolMethod {
@@ -1190,7 +1190,7 @@ describe("OpenAPIToMCPConverter - Additional Complex Tests", () => {
               },
               {
                 name: "createAB",
-                description: "Create an A-B object",
+                description: "Create an A-B object. A schema description",
                 inputSchema: {
                   type: "object",
                   properties: {
@@ -1591,5 +1591,195 @@ describe("OpenAPIToMCPConverter - Additional Complex Tests", () => {
     // Use the custom verification instead of direct equality
     verifyTools(tools, expected.tools);
     expect(openApiLookup).toEqual(expected.openApiLookup);
+  });
+});
+
+describe("operation ids in the document's prose", () => {
+  const spec: OpenAPIV3.Document = {
+    openapi: "3.0.0",
+    info: { title: "t", version: "1" },
+    paths: {
+      "/v2/schemas/{kind}": {
+        get: {
+          operationId: "get_schema",
+          summary: "Get a schema",
+          parameters: [{ name: "kind", in: "path", required: true, schema: { type: "string" } }],
+          responses: { "200": { description: "ok" } },
+        },
+      },
+      "/v2/spaces/{space_id}/templates": {
+        post: {
+          operationId: "create_template",
+          summary: "Create a template",
+          description: "Read get_schema first; validate is a word",
+          parameters: [{ name: "space_id", in: "path", required: true, schema: { type: "string" } }],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  description: "an AnyBlock document; its schema comes from get_schema with kind template",
+                },
+              },
+            },
+          },
+          responses: { "201": { description: "created" } },
+        },
+      },
+    },
+  };
+
+  it("are re-spelled as this server's tool names in the MCP listing", () => {
+    const converter = new OpenAPIToMCPConverter(spec);
+    const { tools } = converter.convertToMCPTools();
+    const create = tools.API.methods.find((m) => m.name === "create-template")!;
+    expect(create.description).toBe("Create a template. Read API-get-schema first; validate is a word");
+    expect((create.inputSchema.properties!.body as IJsonSchema).description).toBe(
+      "an AnyBlock document; its schema comes from API-get-schema with kind template",
+    );
+  });
+
+  it("keep the document's spelling in the exports that name tools by operationId", () => {
+    const nested: OpenAPIV3.Document = JSON.parse(JSON.stringify(spec));
+    const post = nested.paths["/v2/spaces/{space_id}/templates"]!.post!;
+    (post.requestBody as OpenAPIV3.RequestBodyObject).content["application/json"].schema = {
+      type: "object",
+      description: "an AnyBlock document; its schema comes from get_schema with kind template",
+      anyOf: [{ type: "object", properties: { deep: { type: "string", description: "see get_schema" } } }],
+    };
+    post.responses["201"] = {
+      description: "created",
+      content: {
+        "application/json": {
+          schema: {
+            type: "object",
+            properties: { op: { type: "string", description: "an operationId such as get_schema" } },
+          },
+        },
+      },
+    };
+    const converter = new OpenAPIToMCPConverter(nested);
+    const documentSpelling = "an AnyBlock document; its schema comes from get_schema with kind template";
+    const deepOf = (schema: IJsonSchema) =>
+      ((schema.properties!.body as IJsonSchema).anyOf![0] as IJsonSchema).properties!.deep as IJsonSchema;
+    const opOf = (schema: IJsonSchema | null | undefined) => (schema!.properties!.op as IJsonSchema).description;
+    // the MCP listing re-spells the input, nested too, and leaves the output alone
+    const mcp = converter.convertToMCPTools().tools.API.methods.find((m) => m.name === "create-template")!;
+    expect(deepOf(mcp.inputSchema).description).toBe("see API-get-schema");
+    expect(opOf(mcp.outputSchema as IJsonSchema)).toBe("an operationId such as get_schema");
+    const anthropic = converter.convertToAnthropicTools().find((t) => t.name === "create_template")!;
+    expect(deepOf(anthropic.input_schema as IJsonSchema).description).toBe("see get_schema");
+    expect(anthropic.description).toBe("Create a template. Read get_schema first; validate is a word");
+    expect(((anthropic.input_schema as IJsonSchema).properties!.body as IJsonSchema).description).toBe(
+      documentSpelling,
+    );
+    const { zip } = converter.convertToMCPTools();
+    expect(zip["API-create-template"].mcp.description).toBe(
+      "Create a template. Read get_schema first; validate is a word",
+    );
+    expect((zip["API-create-template"].mcp.inputSchema.properties!.body as IJsonSchema).description).toBe(
+      documentSpelling,
+    );
+    const openai = converter
+      .convertToOpenAITools()
+      .find((t) => "function" in t && t.function.name === "create_template")!;
+    expect("function" in openai && openai.function.description).toBe(
+      "Create a template. Read get_schema first; validate is a word",
+    );
+    const parameters = "function" in openai ? (openai.function.parameters as IJsonSchema) : undefined;
+    expect((parameters!.properties!.body as IJsonSchema).description).toBe(documentSpelling);
+    expect(deepOf(parameters!).description).toBe("see get_schema");
+    expect(deepOf(zip["API-create-template"].mcp.inputSchema).description).toBe("see get_schema");
+    expect(opOf(zip["API-create-template"].mcp.outputSchema as IJsonSchema)).toBe("an operationId such as get_schema");
+  });
+
+  it("carry a flattened body's own description into the tool description", () => {
+    const flat: OpenAPIV3.Document = JSON.parse(JSON.stringify(spec));
+    const post = flat.paths["/v2/spaces/{space_id}/templates"]!.post!;
+    post.requestBody = {
+      required: true,
+      content: {
+        "application/json": {
+          schema: {
+            type: "object",
+            description: "the template body; the whole document form comes from get_schema with kind template",
+            properties: { name: { type: "string" } },
+          },
+        },
+      },
+    };
+    const { tools } = new OpenAPIToMCPConverter(flat).convertToMCPTools();
+    const create = tools.API.methods.find((m) => m.name === "create-template")!;
+    expect(create.inputSchema.properties).toHaveProperty("name");
+    expect(create.inputSchema.properties).not.toHaveProperty("body");
+    expect(create.description).toBe(
+      "Create a template. Read API-get-schema first; validate is a word. the template body; the whole document form comes from API-get-schema with kind template",
+    );
+  });
+
+  it("do not let a response's fallback description reach a body that shares its component", () => {
+    const shared: OpenAPIV3.Document = JSON.parse(JSON.stringify(spec));
+    shared.components = { schemas: { Widget: { type: "object", properties: { name: { type: "string" } } } } };
+    shared.paths["/v2/widgets"] = {
+      get: {
+        operationId: "get_widget",
+        summary: "Get a widget",
+        responses: {
+          "200": {
+            description: "Widget returned by GET",
+            content: { "application/json": { schema: { $ref: "#/components/schemas/Widget" } } },
+          },
+        },
+      },
+      post: {
+        operationId: "create_widget",
+        summary: "Create a widget",
+        requestBody: {
+          required: true,
+          content: { "application/json": { schema: { $ref: "#/components/schemas/Widget" } } },
+        },
+        responses: { "201": { description: "created" } },
+      },
+    };
+    const { tools } = new OpenAPIToMCPConverter(shared).convertToMCPTools();
+    const create = tools.API.methods.find((m) => m.name === "create-widget")!;
+    expect(create.description).toBe("Create a widget");
+    // the response keeps its fallback description
+    const get = tools.API.methods.find((m) => m.name === "get-widget")!;
+    expect((get.outputSchema as IJsonSchema).description).toBe("Widget returned by GET");
+    // and a component's own description wins over the fallback
+    const described: OpenAPIV3.Document = JSON.parse(JSON.stringify(shared));
+    (described.components!.schemas!.Widget as OpenAPIV3.SchemaObject).description = "A widget";
+    const again = new OpenAPIToMCPConverter(described).convertToMCPTools().tools.API.methods;
+    expect((again.find((m) => m.name === "get-widget")!.outputSchema as IJsonSchema).description).toBe("A widget");
+    expect(again.find((m) => m.name === "create-widget")!.description).toBe("Create a widget. A widget");
+  });
+
+  it("keep a reference back into a schema being converted as a definition, without logging an error", () => {
+    const cyclic: OpenAPIV3.Document = JSON.parse(JSON.stringify(spec));
+    cyclic.components = {
+      schemas: {
+        Node: {
+          type: "object",
+          properties: { children: { type: "array", items: { $ref: "#/components/schemas/Node" } } },
+        },
+      },
+    };
+    cyclic.paths["/v2/spaces/{space_id}/templates"]!.post!.requestBody = {
+      required: true,
+      content: { "application/json": { schema: { $ref: "#/components/schemas/Node" } } },
+    };
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const { tools } = new OpenAPIToMCPConverter(cyclic).convertToMCPTools();
+      const create = tools.API.methods.find((m) => m.name === "create-template")!;
+      const children = create.inputSchema.properties!.children as IJsonSchema;
+      expect(children.items).toMatchObject({ $ref: "#/$defs/Node" });
+      expect(create.inputSchema.$defs).toHaveProperty("Node");
+      expect(errors).not.toHaveBeenCalled();
+    } finally {
+      errors.mockRestore();
+    }
   });
 });
