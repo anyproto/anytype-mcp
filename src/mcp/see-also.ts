@@ -131,7 +131,8 @@ export function servesJsonEnvelope(
   if (!response) return true;
   const content = response.content;
   if (!content || Object.keys(content).length === 0) return true;
-  return Object.keys(content).some((mediaType) => /^application\/([a-z.+-]*\+)?json\b/i.test(mediaType));
+  // application/json and any +json structured syntax (vendor subtypes may carry digits and dots)
+  return Object.keys(content).some((mediaType) => /^application\/(?:[\w.+-]*\+)?json\s*(?:;|$)/i.test(mediaType.trim()));
 }
 
 function queryString(query?: Record<string, string>): string {
