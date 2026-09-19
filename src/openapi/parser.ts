@@ -2,7 +2,7 @@ import type { Tool } from "@anthropic-ai/sdk/resources/messages/messages";
 import type { JSONSchema7 as IJsonSchema } from "json-schema";
 import type { ChatCompletionTool } from "openai/resources/chat/completions";
 import type { OpenAPIV3, OpenAPIV3_1 } from "openapi-types";
-import { OpVocabulary, respellDescriptions, respellOpIds } from "./op-vocabulary";
+import { OpVocabulary, respellOpIds, respellSchemaDescriptions } from "./op-vocabulary";
 import { getOperationExclusion, getParameterPolicy, isFileDownload } from "./tool-policy";
 
 type NewToolMethod = {
@@ -82,10 +82,13 @@ export class OpenAPIToMCPConverter {
         return this.schemaCache[ref];
       }
 
+      const cycle = resolvedRefs.has(ref);
       const resolved = this.internalResolveRef(ref, resolvedRefs);
       if (!resolved) {
-        // TODO: need extensive tests for this and we definitely need to handle the case of self references
-        console.error(`Failed to resolve ref ${ref}`);
+        // a reference back into a schema still being converted (a filter
+        // node's own filters) is kept as a $defs reference and its
+        // definition retained below; only an unknown target is an error
+        if (!cycle) console.error(`Failed to resolve ref ${ref}`);
         return {
           $ref: ref.replace(/^#\/components\/schemas\//, "#/$defs/"),
           description: "description" in schema ? ((schema.description as string) ?? "") : "",
@@ -346,16 +349,19 @@ export class OpenAPIToMCPConverter {
     }
 
     // the document names operations by operationId in its prose (a body
-    // description that says which schema to read first); the listing
-    // names them by tool, once every tool name is known
+    // description that says which schema to read first); the MCP listing
+    // names them by tool, once every tool name is known. `zip` keeps the
+    // document's own spelling: the OpenAI and Anthropic exports advertise
+    // tools under their operationId, so for them the op id IS the name.
     const vocabulary: OpVocabulary = {};
     for (const [fullName, operation] of Object.entries(openApiLookup)) {
       if (operation.operationId) vocabulary[operation.operationId] = fullName;
     }
-    for (const mcpMethod of tools[apiName].methods) {
-      mcpMethod.description = respellOpIds(mcpMethod.description, vocabulary);
-      mcpMethod.inputSchema = respellDescriptions(mcpMethod.inputSchema, vocabulary);
-    }
+    tools[apiName].methods = tools[apiName].methods.map((mcpMethod) => ({
+      ...mcpMethod,
+      description: respellOpIds(mcpMethod.description, vocabulary),
+      inputSchema: respellSchemaDescriptions(mcpMethod.inputSchema, vocabulary),
+    }));
 
     return { tools, openApiLookup, zip };
   }
@@ -484,6 +490,9 @@ export class OpenAPIToMCPConverter {
     }
 
     const methodName = operation.operationId;
+    // a body flattened into arguments loses its own description; it is
+    // appended to the tool's, where a schema-discovery instruction belongs
+    let flattenedBodyDescription: string | undefined;
 
     const inputSchema: IJsonSchema & { type: "object" } = {
       type: "object",
@@ -549,6 +558,9 @@ export class OpenAPIToMCPConverter {
           const bodySchema = this.getJsonRequestBodySchema(operation)!;
           // Merge body schema into the inputSchema's properties
           if (bodySchema.type === "object" && bodySchema.properties) {
+            if (typeof bodySchema.description === "string" && bodySchema.description.trim()) {
+              flattenedBodyDescription = bodySchema.description;
+            }
             for (const [name, propSchema] of Object.entries(bodySchema.properties)) {
               // TODO: Add support for filters
               if (name === "filters") continue;
@@ -578,6 +590,7 @@ export class OpenAPIToMCPConverter {
     if (path.startsWith("/v2/")) {
       parts.push(operation.description);
     }
+    parts.push(flattenedBodyDescription);
     let description = parts
       .filter((part): part is string => typeof part === "string" && part.trim() !== "")
       .map((part) => part.trim().replace(/\.$/, ""))

@@ -1,6 +1,6 @@
 import { JSONSchema7 as IJsonSchema } from "json-schema";
 import { OpenAPIV3 } from "openapi-types";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { OpenAPIToMCPConverter } from "../parser";
 
 interface ToolMethod {
@@ -1190,7 +1190,7 @@ describe("OpenAPIToMCPConverter - Additional Complex Tests", () => {
               },
               {
                 name: "createAB",
-                description: "Create an A-B object",
+                description: "Create an A-B object. A schema description",
                 inputSchema: {
                   type: "object",
                   properties: {
@@ -1630,7 +1630,7 @@ describe("operation ids in the document's prose", () => {
     },
   };
 
-  it("are re-spelled as this server's tool names in the listing", () => {
+  it("are re-spelled as this server's tool names in the MCP listing", () => {
     const converter = new OpenAPIToMCPConverter(spec);
     const { tools } = converter.convertToMCPTools();
     const create = tools.API.methods.find((m) => m.name === "create-template")!;
@@ -1638,5 +1638,68 @@ describe("operation ids in the document's prose", () => {
     expect((create.inputSchema.properties!.body as IJsonSchema).description).toBe(
       "an AnyBlock document; its schema comes from API-get-schema with kind template",
     );
+  });
+
+  it("keep the document's spelling in the exports that name tools by operationId", () => {
+    const converter = new OpenAPIToMCPConverter(spec);
+    const anthropic = converter.convertToAnthropicTools().find((t) => t.name === "create_template")!;
+    expect(anthropic.description).toBe("Create a template. Read get_schema first; validate is a word");
+    const openai = converter
+      .convertToOpenAITools()
+      .find((t) => "function" in t && t.function.name === "create_template")!;
+    expect("function" in openai && openai.function.description).toBe(
+      "Create a template. Read get_schema first; validate is a word",
+    );
+  });
+
+  it("carry a flattened body's own description into the tool description", () => {
+    const flat: OpenAPIV3.Document = JSON.parse(JSON.stringify(spec));
+    const post = flat.paths["/v2/spaces/{space_id}/templates"]!.post!;
+    post.requestBody = {
+      required: true,
+      content: {
+        "application/json": {
+          schema: {
+            type: "object",
+            description: "the template body; the whole document form comes from get_schema with kind template",
+            properties: { name: { type: "string" } },
+          },
+        },
+      },
+    };
+    const { tools } = new OpenAPIToMCPConverter(flat).convertToMCPTools();
+    const create = tools.API.methods.find((m) => m.name === "create-template")!;
+    expect(create.inputSchema.properties).toHaveProperty("name");
+    expect(create.inputSchema.properties).not.toHaveProperty("body");
+    expect(create.description).toBe(
+      "Create a template. Read API-get-schema first; validate is a word. the template body; the whole document form comes from API-get-schema with kind template",
+    );
+  });
+
+  it("keep a reference back into a schema being converted as a definition, without logging an error", () => {
+    const cyclic: OpenAPIV3.Document = JSON.parse(JSON.stringify(spec));
+    cyclic.components = {
+      schemas: {
+        Node: {
+          type: "object",
+          properties: { children: { type: "array", items: { $ref: "#/components/schemas/Node" } } },
+        },
+      },
+    };
+    cyclic.paths["/v2/spaces/{space_id}/templates"]!.post!.requestBody = {
+      required: true,
+      content: { "application/json": { schema: { $ref: "#/components/schemas/Node" } } },
+    };
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const { tools } = new OpenAPIToMCPConverter(cyclic).convertToMCPTools();
+      const create = tools.API.methods.find((m) => m.name === "create-template")!;
+      const children = create.inputSchema.properties!.children as IJsonSchema;
+      expect(children.items).toMatchObject({ $ref: "#/$defs/Node" });
+      expect(create.inputSchema.$defs).toHaveProperty("Node");
+      expect(errors).not.toHaveBeenCalled();
+    } finally {
+      errors.mockRestore();
+    }
   });
 });

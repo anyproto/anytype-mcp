@@ -1,6 +1,6 @@
 import { OpenAPIV3 } from "openapi-types";
 
-import { OpVocabulary, respellDescriptions } from "../openapi/op-vocabulary";
+import { OpVocabulary, respellSchemaDescriptions } from "../openapi/op-vocabulary";
 
 /**
  * Typed hint references (`see_also`) — the server names the operations a
@@ -312,10 +312,12 @@ export function respellResponse<T>(data: T, index: OperationIndex, currentOp?: s
   try {
     const body = data as Record<string, unknown>;
     // a served schema names operations by op id in its field descriptions;
-    // those are the only responses whose descriptions are server prose
-    const out: Record<string, unknown> = SCHEMA_OPERATIONS.has(currentOp ?? "")
-      ? respellDescriptions({ ...body }, vocabulary(index))
-      : { ...body };
+    // the `schema` member of those responses is the only server prose here
+    // (`example` and `example_body` are values, and stay as they are)
+    const out: Record<string, unknown> = { ...body };
+    if (SCHEMA_OPERATIONS.has(currentOp ?? "") && body.schema && typeof body.schema === "object") {
+      out.schema = respellSchemaDescriptions(body.schema, vocabulary(index));
+    }
     for (const key of ["issues", "warnings"] as const) {
       const list = body[key];
       if (Array.isArray(list)) {
