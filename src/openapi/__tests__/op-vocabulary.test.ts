@@ -102,7 +102,7 @@ describe("respellSchemaDescriptions", () => {
     const schema = {
       patternProperties: { "^x": at({}) },
       dependentSchemas: { a: at({}) },
-      dependencies: { a: at({}), b: ["c"] },
+      dependencies: { a: at({}), b: ["get_schema"] },
       definitions: { d: at({}) },
       prefixItems: [at({})],
       items: [at({})],
@@ -112,11 +112,16 @@ describe("respellSchemaDescriptions", () => {
       contentSchema: at({}),
       not: at({}),
       else: at({}),
+      allOf: [at({})],
+      additionalItems: at({}),
+      unevaluatedItems: at({}),
     };
-    const text = JSON.stringify(respellSchemaDescriptions(schema, vocabulary));
-    expect(text).not.toContain('"get_schema"');
-    expect((text.match(/API-get-schema/g) ?? []).length).toBe(12);
-    expect(text).toContain('"b":["c"]');
+    const out = respellSchemaDescriptions(schema, vocabulary);
+    const text = JSON.stringify(out);
+    expect((text.match(/"description":"API-get-schema"/g) ?? []).length).toBe(15);
+    expect(text).not.toContain('"description":"get_schema"');
+    // a property-dependency array is a list of names, not schemas
+    expect((out as { dependencies: { b: string[] } }).dependencies.b).toEqual(["get_schema"]);
   });
 
   it("leaves literal payloads alone: enum, const, default, examples and unknown keywords", () => {

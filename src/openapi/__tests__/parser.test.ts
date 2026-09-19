@@ -1641,9 +1641,35 @@ describe("operation ids in the document's prose", () => {
   });
 
   it("keep the document's spelling in the exports that name tools by operationId", () => {
-    const converter = new OpenAPIToMCPConverter(spec);
+    const nested: OpenAPIV3.Document = JSON.parse(JSON.stringify(spec));
+    const post = nested.paths["/v2/spaces/{space_id}/templates"]!.post!;
+    (post.requestBody as OpenAPIV3.RequestBodyObject).content["application/json"].schema = {
+      type: "object",
+      description: "an AnyBlock document; its schema comes from get_schema with kind template",
+      anyOf: [{ type: "object", properties: { deep: { type: "string", description: "see get_schema" } } }],
+    };
+    post.responses["201"] = {
+      description: "created",
+      content: {
+        "application/json": {
+          schema: {
+            type: "object",
+            properties: { op: { type: "string", description: "an operationId such as get_schema" } },
+          },
+        },
+      },
+    };
+    const converter = new OpenAPIToMCPConverter(nested);
     const documentSpelling = "an AnyBlock document; its schema comes from get_schema with kind template";
+    const deepOf = (schema: IJsonSchema) =>
+      ((schema.properties!.body as IJsonSchema).anyOf![0] as IJsonSchema).properties!.deep as IJsonSchema;
+    const opOf = (schema: IJsonSchema | null | undefined) => (schema!.properties!.op as IJsonSchema).description;
+    // the MCP listing re-spells the input, nested too, and leaves the output alone
+    const mcp = converter.convertToMCPTools().tools.API.methods.find((m) => m.name === "create-template")!;
+    expect(deepOf(mcp.inputSchema).description).toBe("see API-get-schema");
+    expect(opOf(mcp.outputSchema as IJsonSchema)).toBe("an operationId such as get_schema");
     const anthropic = converter.convertToAnthropicTools().find((t) => t.name === "create_template")!;
+    expect(deepOf(anthropic.input_schema as IJsonSchema).description).toBe("see get_schema");
     expect(anthropic.description).toBe("Create a template. Read get_schema first; validate is a word");
     expect(((anthropic.input_schema as IJsonSchema).properties!.body as IJsonSchema).description).toBe(
       documentSpelling,
@@ -1663,6 +1689,9 @@ describe("operation ids in the document's prose", () => {
     );
     const parameters = "function" in openai ? (openai.function.parameters as IJsonSchema) : undefined;
     expect((parameters!.properties!.body as IJsonSchema).description).toBe(documentSpelling);
+    expect(deepOf(parameters!).description).toBe("see get_schema");
+    expect(deepOf(zip["API-create-template"].mcp.inputSchema).description).toBe("see get_schema");
+    expect(opOf(zip["API-create-template"].mcp.outputSchema as IJsonSchema)).toBe("an operationId such as get_schema");
   });
 
   it("carry a flattened body's own description into the tool description", () => {
@@ -1716,6 +1745,15 @@ describe("operation ids in the document's prose", () => {
     const { tools } = new OpenAPIToMCPConverter(shared).convertToMCPTools();
     const create = tools.API.methods.find((m) => m.name === "create-widget")!;
     expect(create.description).toBe("Create a widget");
+    // the response keeps its fallback description
+    const get = tools.API.methods.find((m) => m.name === "get-widget")!;
+    expect((get.outputSchema as IJsonSchema).description).toBe("Widget returned by GET");
+    // and a component's own description wins over the fallback
+    const described: OpenAPIV3.Document = JSON.parse(JSON.stringify(shared));
+    (described.components!.schemas!.Widget as OpenAPIV3.SchemaObject).description = "A widget";
+    const again = new OpenAPIToMCPConverter(described).convertToMCPTools().tools.API.methods;
+    expect((again.find((m) => m.name === "get-widget")!.outputSchema as IJsonSchema).description).toBe("A widget");
+    expect(again.find((m) => m.name === "create-widget")!.description).toBe("Create a widget. A widget");
   });
 
   it("keep a reference back into a schema being converted as a definition, without logging an error", () => {

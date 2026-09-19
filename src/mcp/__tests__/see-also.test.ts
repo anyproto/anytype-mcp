@@ -435,31 +435,34 @@ describe("see_also references", () => {
       expect(respellResponse(body, index)).toBe(body);
     });
 
-    it("re-spells op ids in a served schema's descriptions, and only there", () => {
-      const body = {
-        kind: "add_property",
-        description: "list_properties is named here too",
-        endpoint: "PATCH /v2/spaces/{space_id}/types/{type}",
-        schema: {
-          properties: {
-            property: { type: "string", description: "the property, by the key list_properties serves" },
-            title: { type: "string", enum: ["list_properties"], default: { description: "list_properties" } },
+    it.each(["get_schema", "get_op_schema"])(
+      "re-spells op ids in a served schema's descriptions, and only there (%s)",
+      (op) => {
+        const make = () => ({
+          kind: "add_property",
+          description: "list_properties is named here too",
+          endpoint: "PATCH /v2/spaces/{space_id}/types/{type}",
+          schema: {
+            properties: {
+              property: { type: "string", description: "the property, by the key list_properties serves" },
+              title: { type: "string", enum: ["list_properties"], default: { description: "list_properties" } },
+            },
           },
-        },
-        example: { op: "add_property", property: "list_properties", description: "list_properties" },
-        example_body: { ops: [{ op: "add_property", description: "list_properties" }] },
-      };
-      const out = respellResponse(body, index, "get_op_schema");
-      expect(out.schema.properties.property.description).toBe("the property, by the key API-list-properties serves");
-      expect(out.schema.properties.title).toEqual(body.schema.properties.title);
-      expect(out.example).toEqual(body.example);
-      expect(out.example_body).toEqual(body.example_body);
-      expect(out.description).toBe(body.description);
-      expect(out.endpoint).toBe(body.endpoint);
-      expect(respellResponse(body, index, "get_schema").schema.properties.property.description).toBe(
-        "the property, by the key API-list-properties serves",
-      );
-    });
+          example: { op: "add_property", property: "list_properties", description: "list_properties" },
+          example_body: { ops: [{ op: "add_property", description: "list_properties" }] },
+        });
+        const body = make();
+        const untouched = make(); // the literals as they were, not as the call may have left them
+        const out = respellResponse(body, index, op);
+        expect(out.schema.properties.property.description).toBe("the property, by the key API-list-properties serves");
+        expect(out.schema.properties.title).toEqual(untouched.schema.properties.title);
+        expect(out.example).toEqual(untouched.example);
+        expect(out.example_body).toEqual(untouched.example_body);
+        expect(out.description).toBe(untouched.description);
+        expect(out.endpoint).toBe(untouched.endpoint);
+        expect(body).toEqual(untouched); // the input is not mutated either
+      },
+    );
 
     it("leaves a description member of ordinary data alone", () => {
       const body = { id: "x", description: "list_properties is my favourite op", warnings: [] };
