@@ -97,6 +97,28 @@ describe("respellSchemaDescriptions", () => {
     });
   });
 
+  it("follows every schema-bearing keyword", () => {
+    const at = (value: unknown) => ({ description: "get_schema", ...(value as object) });
+    const schema = {
+      patternProperties: { "^x": at({}) },
+      dependentSchemas: { a: at({}) },
+      dependencies: { a: at({}), b: ["c"] },
+      definitions: { d: at({}) },
+      prefixItems: [at({})],
+      items: [at({})],
+      contains: at({}),
+      unevaluatedProperties: at({}),
+      propertyNames: at({}),
+      contentSchema: at({}),
+      not: at({}),
+      else: at({}),
+    };
+    const text = JSON.stringify(respellSchemaDescriptions(schema, vocabulary));
+    expect(text).not.toContain('"get_schema"');
+    expect((text.match(/API-get-schema/g) ?? []).length).toBe(12);
+    expect(text).toContain('"b":["c"]');
+  });
+
   it("leaves literal payloads alone: enum, const, default, examples and unknown keywords", () => {
     const schema = {
       properties: {

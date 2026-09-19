@@ -159,7 +159,9 @@ Discovery runs once per MCP process. Tool calls reuse the parsed specification a
 
 Tool descriptions contain operation guidance; API errors are returned when calls fail, with `isError: true`, HTTP status when available, and the API's code, message, issues, and hints.
 
-Successful v1 object creation, updates, deletion, and chat creation return a compact `object` receipt with its ID, space ID, name, archive state, and type identity when available. The wrapper omits echoed markdown, snippets, property values, icons, and full type definitions. It preserves warnings, generated IDs, and etag/retry metadata. Read the object to retrieve its content when needed. v2 already returns compact create/edit receipts, which are passed through unchanged; reads, searches, and errors also keep their full API responses.
+The server names its own operations by OpenAPI operationId in the prose it serves. In the MCP tool listing, in the field descriptions of a `get_schema` or `get_op_schema` response, and in repair hints with typed `see_also` references, those names are re-spelled as this wrapper's tool names (`list_properties` becomes `API-list-properties`). Literal values are never rewritten: enum and example values, `op` names, `endpoint` strings and output schemas keep the server's spelling, and so do the OpenAI and Anthropic tool exports, which name tools by operationId.
+
+Successful v1 object creation, updates, deletion, and chat creation return a compact `object` receipt with its ID, space ID, name, archive state, and type identity when available. The wrapper omits echoed markdown, snippets, property values, icons, and full type definitions. It preserves warnings, generated IDs, and etag/retry metadata. Read the object to retrieve its content when needed. v2 already returns compact create/edit receipts, which are passed through unchanged apart from the vocabulary re-spell of their warning hints; reads, searches, and errors also keep their full API responses.
 
 The shared tool policy controls inputs and request routing:
 

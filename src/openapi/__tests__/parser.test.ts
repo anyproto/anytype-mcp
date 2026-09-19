@@ -1642,14 +1642,27 @@ describe("operation ids in the document's prose", () => {
 
   it("keep the document's spelling in the exports that name tools by operationId", () => {
     const converter = new OpenAPIToMCPConverter(spec);
+    const documentSpelling = "an AnyBlock document; its schema comes from get_schema with kind template";
     const anthropic = converter.convertToAnthropicTools().find((t) => t.name === "create_template")!;
     expect(anthropic.description).toBe("Create a template. Read get_schema first; validate is a word");
+    expect(((anthropic.input_schema as IJsonSchema).properties!.body as IJsonSchema).description).toBe(
+      documentSpelling,
+    );
+    const { zip } = converter.convertToMCPTools();
+    expect(zip["API-create-template"].mcp.description).toBe(
+      "Create a template. Read get_schema first; validate is a word",
+    );
+    expect((zip["API-create-template"].mcp.inputSchema.properties!.body as IJsonSchema).description).toBe(
+      documentSpelling,
+    );
     const openai = converter
       .convertToOpenAITools()
       .find((t) => "function" in t && t.function.name === "create_template")!;
     expect("function" in openai && openai.function.description).toBe(
       "Create a template. Read get_schema first; validate is a word",
     );
+    const parameters = "function" in openai ? (openai.function.parameters as IJsonSchema) : undefined;
+    expect((parameters!.properties!.body as IJsonSchema).description).toBe(documentSpelling);
   });
 
   it("carry a flattened body's own description into the tool description", () => {
@@ -1674,6 +1687,35 @@ describe("operation ids in the document's prose", () => {
     expect(create.description).toBe(
       "Create a template. Read API-get-schema first; validate is a word. the template body; the whole document form comes from API-get-schema with kind template",
     );
+  });
+
+  it("do not let a response's fallback description reach a body that shares its component", () => {
+    const shared: OpenAPIV3.Document = JSON.parse(JSON.stringify(spec));
+    shared.components = { schemas: { Widget: { type: "object", properties: { name: { type: "string" } } } } };
+    shared.paths["/v2/widgets"] = {
+      get: {
+        operationId: "get_widget",
+        summary: "Get a widget",
+        responses: {
+          "200": {
+            description: "Widget returned by GET",
+            content: { "application/json": { schema: { $ref: "#/components/schemas/Widget" } } },
+          },
+        },
+      },
+      post: {
+        operationId: "create_widget",
+        summary: "Create a widget",
+        requestBody: {
+          required: true,
+          content: { "application/json": { schema: { $ref: "#/components/schemas/Widget" } } },
+        },
+        responses: { "201": { description: "created" } },
+      },
+    };
+    const { tools } = new OpenAPIToMCPConverter(shared).convertToMCPTools();
+    const create = tools.API.methods.find((m) => m.name === "create-widget")!;
+    expect(create.description).toBe("Create a widget");
   });
 
   it("keep a reference back into a schema being converted as a definition, without logging an error", () => {

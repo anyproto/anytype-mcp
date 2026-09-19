@@ -659,9 +659,12 @@ export class OpenAPIToMCPConverter {
         true,
       );
 
-      // Preserve the response description if available and not already set
+      // Preserve the response description if available and not already set.
+      // On a copy: the converted schema is cached and shared with any
+      // request body that references the same component, and a body's own
+      // description now reaches the tool listing
       if (responseObj.description && !outputSchema.description) {
-        outputSchema.description = responseObj.description;
+        return { ...outputSchema, description: responseObj.description };
       }
 
       return outputSchema;

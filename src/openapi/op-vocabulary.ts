@@ -46,7 +46,14 @@ export function respellOpIds(text: string, vocabulary: OpVocabulary): string {
 // the JSON Schema keywords whose value is a schema, a list of schemas, or a
 // map of schemas — the only places a description is prose of the schema
 // itself rather than a member of some value
-const SCHEMA_MAPS = new Set(["properties", "patternProperties", "dependentSchemas", "$defs", "definitions"]);
+const SCHEMA_MAPS = new Set([
+  "properties",
+  "patternProperties",
+  "dependentSchemas",
+  "dependencies",
+  "$defs",
+  "definitions",
+]);
 const SCHEMA_LISTS = new Set(["allOf", "anyOf", "oneOf", "prefixItems"]);
 const SCHEMA_SINGLE = new Set([
   "items",
@@ -56,6 +63,7 @@ const SCHEMA_SINGLE = new Set([
   "additionalProperties",
   "unevaluatedProperties",
   "propertyNames",
+  "contentSchema",
   "not",
   "if",
   "then",
@@ -66,7 +74,9 @@ const SCHEMA_SINGLE = new Set([
  * Re-spells op ids in the descriptions of a JSON Schema, following the
  * schema keywords only. What sits under `enum`, `const`, `default`,
  * `example`, `examples` or an unknown keyword is a value and is left as it
- * is. A shared or cyclic subschema is rewritten once and reused.
+ * is. A subschema reached twice is rewritten once and its copy reused; an
+ * edge that closes a cycle keeps the original node, since its copy is not
+ * finished when the edge is met.
  */
 export function respellSchemaDescriptions<T>(schema: T, vocabulary: OpVocabulary): T {
   return respellNode(schema, vocabulary, new Map()) as T;

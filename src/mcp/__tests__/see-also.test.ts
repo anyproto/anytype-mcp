@@ -438,17 +438,23 @@ describe("see_also references", () => {
     it("re-spells op ids in a served schema's descriptions, and only there", () => {
       const body = {
         kind: "add_property",
+        description: "list_properties is named here too",
         endpoint: "PATCH /v2/spaces/{space_id}/types/{type}",
         schema: {
           properties: {
             property: { type: "string", description: "the property, by the key list_properties serves" },
+            title: { type: "string", enum: ["list_properties"], default: { description: "list_properties" } },
           },
         },
-        example: { op: "add_property", property: "list_properties" },
+        example: { op: "add_property", property: "list_properties", description: "list_properties" },
+        example_body: { ops: [{ op: "add_property", description: "list_properties" }] },
       };
       const out = respellResponse(body, index, "get_op_schema");
       expect(out.schema.properties.property.description).toBe("the property, by the key API-list-properties serves");
+      expect(out.schema.properties.title).toEqual(body.schema.properties.title);
       expect(out.example).toEqual(body.example);
+      expect(out.example_body).toEqual(body.example_body);
+      expect(out.description).toBe(body.description);
       expect(out.endpoint).toBe(body.endpoint);
       expect(respellResponse(body, index, "get_schema").schema.properties.property.description).toBe(
         "the property, by the key API-list-properties serves",
