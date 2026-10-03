@@ -1,0 +1,27 @@
+# Source & Config
+src/
+cli/
+scripts/
+tsconfig.json
+vitest.config.ts
+eslint.config.js
+.vscode/
+
+# Tests & Maps
+**/__tests__
+**/*.test.ts
+**/*.test.js
+**/*.map
+build/tsconfig.tsbuildinfo
+
+# Assets & Docs
+CLAUDE.md
+instructions.md
+Dockerfile-multi-stage
+*.tgz
+server.json
+tools.json
+
+# Local Environment
+node_modules/
+.DS_Store
