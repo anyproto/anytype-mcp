@@ -7,7 +7,7 @@
     "mcp",
     "server"
   ],
-  "version": "2.0.1",
+  "version": "2.0.2",
   "license": "MIT",
   "type": "module",
   "scripts": {
@@ -26,34 +26,35 @@
     "anytype-mcp": "bin/cli.mjs"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "1.32.0",
-    "axios": "1.20.0",
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "axios": "1.21.0",
     "form-data": "4.0.6",
     "mustache": "4.2.0",
     "node-fetch": "3.3.2",
     "openapi-client-axios": "7.9.1",
     "openapi-schema-validator": "12.1.3",
     "openapi-types": "12.1.3",
-    "zod": "4.6.5"
+    "zod": "4.6.7"
   },
   "devDependencies": {
-    "@anthropic-ai/sdk": "0.131.0",
+    "@anthropic-ai/sdk": "1.6.0",
     "@eslint/js": "10.0.1",
     "@types/json-schema": "7.0.15",
     "@types/mustache": "4.2.6",
-    "@types/node": "26.6.4",
+    "@types/node": "26.6.6",
     "@types/which": "3.0.4",
-    "@vitest/coverage-v8": "5.0.3",
-    "@typescript-eslint/eslint-plugin": "8.71.0",
-    "@typescript-eslint/parser": "8.71.0",
-    "eslint": "10.12.0",
+    "@typescript-eslint/eslint-plugin": "8.72.1",
+    "@typescript-eslint/parser": "8.72.1",
+    "@typescript/native": "npm:typescript@7.0.2",
+    "@vitest/coverage-v8": "5.1.0",
     "esbuild": "0.28.2",
-    "openai": "7.27.0",
-    "prettier": "3.9.9",
+    "eslint": "10.14.0",
+    "openai": "7.53.0",
+    "prettier": "3.9.10",
     "prettier-plugin-organize-imports": "4.3.0",
     "tsx": "4.23.15",
-    "typescript": "6.0.3",
-    "vitest": "5.0.3"
+    "typescript": "npm:@typescript/typescript6@6.0.2",
+    "vitest": "5.1.0"
   },
   "description": "Official MCP server for Anytype API",
   "repository": {
