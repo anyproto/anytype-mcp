@@ -174,15 +174,6 @@ bun run build
 bun link
 ```
 
-### Measuring tool definitions
-
-```bash
-bun run measure-tools
-bun run measure-tools ./path/to/openapi.json
-```
-
-The first command compares the bundled v1 and v2 fixtures. Both report tool count, serialized characters, and UTF-8 bytes.
-
 ## Contribution
 
 Thank you for your desire to develop Anytype together!
