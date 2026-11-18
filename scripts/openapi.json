@@ -551,25 +551,7 @@
       },
       "FilterCondition": {
         "description": "The filter condition",
-        "enum": [
-          "equal",
-          "not_equal",
-          "greater",
-          "less",
-          "greater_or_equal",
-          "less_or _equal",
-          "like",
-          "not_like",
-          "in",
-          "not_in",
-          "empty",
-          "not_empty",
-          "all_in",
-          "not_all_in",
-          "exact_in",
-          "not_exact_in",
-          "exists"
-        ],
+        "enum": ["eq", "ne", "gt", "gte", "lt", "lte", "contains", "ncontains", "in", "nin", "all", "empty", "nempty"],
         "example": "empty",
         "type": "string",
         "x-enum-comments": {
@@ -604,7 +586,7 @@
         ]
       },
       "FilterExpression": {
-        "description": "Expression filter with nested AND/OR conditions",
+        "description": "Expression filter with nested AND/OR conditions. Supports recursive nesting for complex queries. The 'filters' array can contain nested FilterExpression objects, creating a tree structure for complex logic.  Example: (status=\"done\" AND priority=\"high\") OR (created_date > \"2024-01-01\")  ``` { \"operator\": \"or\", \"filters\": [ { \"operator\": \"and\", \"conditions\": [ {\"property_key\": \"status\", \"condition\": \"eq\", \"select\": \"done_tag_id\"}, {\"property_key\": \"priority\", \"condition\": \"eq\", \"select\": \"high_tag_id\"} ] }, { \"operator\": \"and\", \"conditions\": [ {\"property_key\": \"created_date\", \"condition\": \"gt\", \"date\": \"2024-01-01\"} ] } ] } ```",
         "properties": {
           "conditions": {
             "description": "List of format-specific filter conditions",
@@ -629,6 +611,7 @@
         "type": "object"
       },
       "FilterItem": {
+        "description": "A filter condition that matches a specific property format (text, number, select, date, etc.). Each filter item contains a property_key, condition, and a value field specific to the property format.",
         "oneOf": [
           {
             "$ref": "#/components/schemas/TextFilterItem"
@@ -2183,7 +2166,7 @@
             "type": "string"
           },
           "select": {
-            "description": "Tag Id - for eq/ne conditions (single selection)",
+            "description": "Tag Id - for eq/ne/in conditions (single selection)",
             "example": "tag_id",
             "type": "string"
           }
@@ -2716,7 +2699,7 @@
           },
           "layout": {
             "description": "The layout of the view",
-            "enum": ["grid", "table"],
+            "enum": ["grid", "list", "gallery", "kanban", "calendar", "graph"],
             "example": "grid",
             "type": "string"
           },
@@ -4560,7 +4543,7 @@
             "in": "query",
             "name": "format",
             "schema": {
-              "default": "\"md\"",
+              "default": "md",
               "enum": ["md"],
               "type": "string"
             }
