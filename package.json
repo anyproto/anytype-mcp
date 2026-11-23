@@ -37,7 +37,7 @@
     "zod": "4.6.7"
   },
   "devDependencies": {
-    "@anthropic-ai/sdk": "1.10.0",
+    "@anthropic-ai/sdk": "1.12.0",
     "@eslint/js": "10.0.1",
     "@types/json-schema": "7.0.15",
     "@types/mustache": "4.2.6",
@@ -49,7 +49,7 @@
     "@vitest/coverage-v8": "5.1.1",
     "esbuild": "0.28.2",
     "eslint": "10.15.0",
-    "openai": "7.59.0",
+    "openai": "7.62.0",
     "prettier": "3.10.1",
     "prettier-plugin-organize-imports": "4.3.0",
     "tsx": "4.23.15",

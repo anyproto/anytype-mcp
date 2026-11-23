@@ -6,7 +6,7 @@
       "name": "@anyproto/anytype-mcp",
       "dependencies": {
         "@modelcontextprotocol/sdk": "1.32.2",
-        "axios": "^1.21.1",
+        "axios": "1.21.1",
         "form-data": "4.0.6",
         "mustache": "4.2.0",
         "node-fetch": "3.3.2",
@@ -16,29 +16,29 @@
         "zod": "4.6.7",
       },
       "devDependencies": {
-        "@anthropic-ai/sdk": "^1.10.0",
+        "@anthropic-ai/sdk": "1.12.0",
         "@eslint/js": "10.0.1",
         "@types/json-schema": "7.0.15",
         "@types/mustache": "4.2.6",
         "@types/node": "26.6.6",
         "@types/which": "3.0.4",
-        "@typescript-eslint/eslint-plugin": "^8.73.0",
-        "@typescript-eslint/parser": "^8.73.0",
+        "@typescript-eslint/eslint-plugin": "8.73.0",
+        "@typescript-eslint/parser": "8.73.0",
         "@typescript/native": "npm:typescript@7.0.2",
-        "@vitest/coverage-v8": "^5.1.1",
+        "@vitest/coverage-v8": "5.1.1",
         "esbuild": "0.28.2",
-        "eslint": "^10.15.0",
-        "openai": "^7.59.0",
+        "eslint": "10.15.0",
+        "openai": "7.62.0",
         "prettier": "3.10.1",
         "prettier-plugin-organize-imports": "4.3.0",
         "tsx": "4.23.15",
         "typescript": "npm:@typescript/typescript6@6.0.2",
-        "vitest": "^5.1.1",
+        "vitest": "5.1.1",
       },
     },
   },
   "packages": {
-    "@anthropic-ai/sdk": ["@anthropic-ai/sdk@1.10.0", "", { "dependencies": { "@opentelemetry/api": "^1.4.1", "json-schema-to-ts": "^3.1.1", "standardwebhooks": "^1.0.0" }, "peerDependencies": { "zod": "^3.25.0 || ^4.0.0" }, "optionalPeers": ["zod"], "bin": { "anthropic-ai-sdk": "bin/cli" } }, "sha512-j4uVct5p3aGIz/BU4K8VU5vt2A6AueHTvx2gfF3xr4mVpwH9IJMWEAUKNwSwdZSJOHQq1Za2tv5huYc5v02D0w=="],
+    "@anthropic-ai/sdk": ["@anthropic-ai/sdk@1.12.0", "", { "dependencies": { "@opentelemetry/api": "^1.4.1", "json-schema-to-ts": "^3.1.1", "standardwebhooks": "^1.0.0" }, "peerDependencies": { "zod": "^3.25.0 || ^4.0.0" }, "optionalPeers": ["zod"], "bin": { "anthropic-ai-sdk": "bin/cli" } }, "sha512-0j9zwiQdkvr90LoiiBDUh7kae1lsNW2EqeE0vGceYne4BrmMDdDVoQ4KGOieUee0zWZbVJKsf/06JY8U5i63Xg=="],
 
     "@babel/helper-string-parser": ["@babel/helper-string-parser@7.29.7", "", {}, "sha512-Pb5ijPrZ89GDH8223L4UP8i6QApWxs04RbPQJTeWDV0/keR2E36MeKnyr6LYmUUvqRRI+Iv87SuF1W6ErINzYw=="],
 
@@ -576,7 +576,7 @@
 
     "once": ["once@1.4.0", "", { "dependencies": { "wrappy": "1" } }, "sha512-lNaJgI+2Q5URQBkccEKHTQOPaXdUxnZZElQTZY0MFUAuaEqe1E+Nyvgdz/aIyNi6Z9MzO5dv1H8n58/GELp3+w=="],
 
-    "openai": ["openai@7.59.0", "", { "peerDependencies": { "@aws-sdk/credential-provider-node": ">=3.972.0 <4", "@smithy/hash-node": ">=4.3.0 <5", "@smithy/signature-v4": ">=5.4.0 <6", "google-auth-library": ">=9.15.1 <12", "undici": ">=5 <9", "ws": "^8.21.0", "zod": "^3.25 || ^4.0" }, "optionalPeers": ["@aws-sdk/credential-provider-node", "@smithy/hash-node", "@smithy/signature-v4", "google-auth-library", "undici", "ws", "zod"] }, "sha512-wPYKJkLPFEdNJ2tThSg4jE1Ptsv4X3u8g8LIvu0Qz/UIhsKeCzl73rl48PtQsDVrJL/ku0liXOsbyd2TsRsPJw=="],
+    "openai": ["openai@7.62.0", "", { "peerDependencies": { "@aws-sdk/credential-provider-node": ">=3.972.0 <4", "@smithy/hash-node": ">=4.3.0 <5", "@smithy/signature-v4": ">=5.4.0 <6", "google-auth-library": ">=9.15.1 <12", "undici": ">=5 <9", "ws": "^8.21.0", "zod": "^3.25 || ^4.0" }, "optionalPeers": ["@aws-sdk/credential-provider-node", "@smithy/hash-node", "@smithy/signature-v4", "google-auth-library", "undici", "ws", "zod"] }, "sha512-dehzgY2anBfU3H+FfWHCVjhb9ZRYzahzNpvmMExTmMaeU11i51NJIMJPDctgLiP4+pCh53KIsLVQ66ucKyDNMA=="],
 
     "openapi-client-axios": ["openapi-client-axios@7.9.1", "", { "dependencies": { "bath-es5": "^3.0.3", "dereference-json-schema": "^0.2.1", "openapi-types": "^12.1.3" }, "peerDependencies": { "axios": ">=0.25.0", "js-yaml": "^4.1.0" } }, "sha512-T8BqBwXJvJIV6afVWPV2/WRUe19hf/uBye/8ceuxOCCxPANhFYVbdOKBFJjrdmpm4lKDt3guosAuAVoJXujuCA=="],
 
