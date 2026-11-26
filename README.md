@@ -159,7 +159,7 @@ See [Tool behavior](docs/tool-behavior.md) for errors, sessions, and troubleshoo
 On `full`, two more tools move files between Anytype and the computer running MCP. They use one directory only: `~/.anytype-mcp/files`, created on first use and readable by your user only. Set `ANYTYPE_MCP_FILES_DIR` to an absolute path to use another directory.
 
 - `upload_local_file` uploads a file from that directory. Its `path` is relative to the directory, for example `report.pdf`. Paths outside it are refused, including absolute paths, `..`, and symbolic links that lead out. Named pipes and other special files are refused too. To upload a file, put it in the directory first.
-- `download_file` saves a file into that directory under the file's name in Anytype, such as `report.pdf`, or `report (2).pdf` if that name is taken, and returns the path. It never overwrites an existing file. A file appears under its name only once it is complete.
+- `download_file` saves a file into that directory under the file's name in Anytype, such as `report.pdf`, or `report (2).pdf` if that name is taken, and returns the path. It never overwrites an existing file. A file appears under its name only once it is complete. This needs a filesystem with hard links; on FAT or exFAT the download fails and nothing is saved.
 
 `upload_file` uploads from a web URL and needs no local directory.
 
@@ -180,10 +180,23 @@ Version 3 forwards to Anytype's built-in MCP server instead of generating tools 
   ```
 
 - `API-upload-file` took a local `file`. Its replacements are `upload_local_file`, which takes a `path` inside the local files directory (see [Local files](#local-files)), and `upload_file`, which takes a web `url` only.
-- `expected_etag` is gone. Edits are now atomic operations, so concurrent edits to different parts no longer overwrite each other. `if_match` is still accepted on the tools that declare it, for callers that hold a value.
-- `request_key` is gone. Anytype adds an idempotency key to every write itself. Only `toggle_chat_reaction` takes one, as `idempotency_key`, so a retried toggle does not undo itself.
+- `expected_etag` is gone. Targeted edits (`patch_object` and `update_type` ops, property and block changes) are atomic operations, so concurrent edits to different parts no longer overwrite each other. Whole-value fields still replace what is there: `update_type` with `property_definitions` replaces the type's entire field list, so add a single field with the `add_property` op instead:
+
+  ```jsonc
+  // replaces every field of the type: a field someone else just added is detached
+  { "space_id": "…", "type": "task", "property_definitions": [ /* the whole list */ ] }
+  // adds one field and leaves the others alone
+  { "space_id": "…", "type": "task", "ops": [{ "op": "add_property", /* see get_op_schema */ }] }
+  ```
+
+  `if_match` is still accepted on the tools that declare it, for callers that hold a value.
+- `request_key` is gone. Anytype adds an idempotency key to every write itself. Only `toggle_chat_reaction` takes one, as `idempotency_key`, so a retried toggle does not undo itself. Anytype generates a fresh key for each MCP call, so if a write's reply is lost, check whether the write landed before repeating it; this matters most for `toggle_chat_reaction`, where a repeat undoes the first toggle.
 - `API-auth-whoami` and `API-publish-chat-status` are no longer offered.
-- `run <openapi-spec>` is gone. To keep the 2.x behavior, for example with an Anytype older than heart 0.51.6, pin version 2: `"args": ["-y", "@anyproto/anytype-mcp@2.0.3"]`.
+- `run <openapi-spec>` is gone. The spec chose which server the key went to: its `servers[0].url`. Before removing the spec argument, set `ANYTYPE_API_BASE_URL` to that API origin, for example `http://127.0.0.1:31012`, or version 3 sends your key to the default `http://127.0.0.1:31009`. To keep the 2.x behavior instead, for example with an Anytype older than heart 0.51.6, pin version 2 and keep your arguments as they were:
+
+  ```json
+  { "args": ["-y", "@anyproto/anytype-mcp@2.0.3", "run", "http://127.0.0.1:31012/v2/docs/openapi.json"] }
+  ```
 
 ## Development
 

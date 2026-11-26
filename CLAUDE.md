@@ -42,7 +42,8 @@ Anytype serves MCP itself, from its local API server at `POST /mcp/{small|large|
 
 **HTTP side (`src/proxy/heart-client.ts`)**
 - One POST per message; 202 for notifications; HTTP-level failures (401/403/404/429, unreachable, redirect) are classified and rendered by `describeFailure`
-- Curated tiers: `Mcp-Session-Id` from initialize, sent on every message, renewed once (shared by concurrent calls) after heart expires it. No `tools/call` runs across a reset (its handles may name other objects): the reset stays pending until a tool call is answered `SESSION_EXPIRED`, and a call that arrived before the reset (`resets` is snapshotted on receipt) is refused too. A refused initialize ends the session heart minted for it. `close()` waits for a pending initialize and DELETEs the session
+- Curated tiers: `Mcp-Session-Id` (recorded when the headers arrive) from initialize, sent on every message, renewed once — initialize and then notifications/initialized, shared by every waiting message — after heart expires it. Session resets are two counters: `generation` (resets so far, bumped by the first message to see the session gone) and `delivered` (advanced by stdio only after it writes `SESSION_EXPIRED` to a live request). A `tools/call` request runs only if `delivered` when it arrived equals `generation`; nothing else consumes or clears a reset. A refused or broken initialize ends the session heart minted. `close()` waits for a pending initialize and DELETEs the session
+- Non-2xx is handled first: heart's HTTP 400 JSON-RPC envelope error is rebuilt (`rpcError`: request id, reserved-range code, bounded redacted message); every other refusal goes through `anytypeError`, which requires heart's `status`/`code`/`message`
 - Redirects are never followed; error bodies are read bounded, and only heart's documented error fields are quoted, with configured credentials redacted (`src/proxy/errors.ts`). The reply bound (128 MiB) covers heart's 32 MiB body carried twice
 
 **stdio side (`src/proxy/stdio-proxy.ts`)**
@@ -51,7 +52,7 @@ Anytype serves MCP itself, from its local API server at `POST /mcp/{small|large|
 - On the full tier, appends the local file tools to `tools/list` and dispatches calls to them
 
 **Local file tools (`src/proxy/local-tools.ts`, `src/proxy/files.ts`)**
-- `upload_local_file` and `download_file`, against heart's v2 REST file routes with the caller's key, confined to one root directory (default `~/.anytype-mcp/files`): relative paths only, realpath containment, `O_NOFOLLOW|O_NONBLOCK` and a regular-file check on upload, downloads streamed to a temporary file and published with a no-overwrite hard link (exclusive copy as fallback), named `properties.name` + `file_ext`, whole-file (HTTP 200) only, streaming multipart upload
+- `upload_local_file` and `download_file`, against heart's v2 REST file routes with the caller's key, confined to one root directory (default `~/.anytype-mcp/files`): relative paths only, realpath containment, `O_NOFOLLOW|O_NONBLOCK` and a regular-file check on upload, downloads streamed to a temporary file and published with a no-overwrite hard link (no hard links: the download fails), named `properties.name` + `file_ext` and shortened by UTF-8 bytes, whole-file (HTTP 200) only, streaming multipart upload whose success requires heart's receipt
 - They step aside if heart lists a tool with the same name
 
 ### Key Design Patterns

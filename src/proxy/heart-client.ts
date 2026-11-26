@@ -39,8 +39,14 @@ export type HeartReply =
   | { kind: "messages"; messages: HeartMessage[] }
   | { kind: "accepted" }
   | { kind: "cancelled" }
-  /** The session expired; a new one is open, but this tool call was not run in it. */
-  | { kind: "sessionExpired" }
+  /**
+   * The tool call was not run: the session was reset (to `generation`) before
+   * the client was told. Stdio acknowledges the generation once it has
+   * written the warning to a live request.
+   */
+  | { kind: "sessionExpired"; generation: number }
+  /** Anytype's HTTP 400 JSON-RPC error for a malformed envelope, rebuilt from its validated parts. */
+  | { kind: "rpcError"; code: number; message: string }
   | { kind: "failed"; failure: HeartFailure };
 
 export interface HeartClientOptions {
@@ -75,14 +81,18 @@ export class HeartClient {
   private initializeParams?: JsonObject;
   /** Set when Anytype ended the session; the next message opens a new one first. */
   private needsSession = false;
+  /** The one renewal under way: initialize, then notifications/initialized. */
   private renewal?: Promise<HeartFailure | undefined>;
   private initializing?: Promise<unknown>;
   private closing = false;
   private renewals = 0;
-  /** Sessions the proxy opened in place of an expired one. */
-  private resetCount = 0;
-  /** A reset no tool call has been told about yet. */
-  private resetPending = false;
+  // Session resets, as two counters. `generation` counts the sessions Anytype
+  // ended under the client; `delivered` is the newest generation the client has
+  // been told about — stdio advances it only after writing SESSION_EXPIRED to
+  // a live request. A tool call runs only if, when it arrived, the client had
+  // been told about every reset so far (delivered then === generation now).
+  private generation = 0;
+  private delivered = 0;
   private readonly redact: (text: string) => string;
 
   constructor(options: HeartClientOptions) {
@@ -94,12 +104,14 @@ export class HeartClient {
     this.redact = redactor(this.headers);
   }
 
-  /**
-   * How many times the session was reset. The stdio side reads it when a
-   * request arrives, so a tool call that waited across a reset is refused.
-   */
-  get resets(): number {
-    return this.resetCount;
+  /** The newest reset the client has been told about; stdio reads it when a request arrives. */
+  get deliveredResets(): number {
+    return this.delivered;
+  }
+
+  /** Stdio wrote SESSION_EXPIRED for this generation to a live request: the client knows. */
+  acknowledgeReset(generation: number): void {
+    this.delivered = Math.max(this.delivered, generation);
   }
 
   /** The curated tiers' session, if one is open. */
@@ -116,37 +128,34 @@ export class HeartClient {
    * Forwards one message. On the curated tiers Anytype ends a session idle for
    * 30 minutes; a stdio client cannot re-initialize, so the proxy opens a new
    * session with the client's own initialize parameters. Numbered results of
-   * the old session may name other objects in the new one, so no tool call
-   * runs across a reset: the first tool call after it — or one that was
-   * waiting while it happened (seenResets is the count when it arrived) — is
-   * answered sessionExpired instead, whatever message discovered the expiry.
+   * the old session may name other objects in the new one, so a tool call
+   * that arrived before the client was told of a reset (seenDelivered behind
+   * generation) is answered sessionExpired and never sent. Other messages
+   * name no results and are resent into the new session.
    */
-  async send(message: Inbound, signal?: AbortSignal, seenResets = this.resetCount): Promise<HeartReply> {
+  async send(message: Inbound, signal?: AbortSignal, seenDelivered = this.delivered): Promise<HeartReply> {
     if (this.closing) return { kind: "failed", failure: { kind: "closed" } };
     if (message.kind === "request" && message.method === "initialize") return this.initialize(message);
-    const toolCall = message.method === "tools/call";
-    const crossedReset = () => toolCall && (this.resetPending || seenResets !== this.resetCount);
-    const expired = (): HeartReply => {
-      this.resetPending = false;
-      return { kind: "sessionExpired" };
-    };
+    // an id-less tools/call is a notification, which Anytype does not run
+    const toolCall = message.kind === "request" && message.method === "tools/call";
     if (this.needsSession) {
       const failure = await this.renew();
       if (failure) return { kind: "failed", failure };
     }
-    if (crossedReset()) return expired();
+    if (toolCall && seenDelivered < this.generation) return { kind: "sessionExpired", generation: this.generation };
     const sent = this.sessionId;
     const reply = await this.post(message.raw, signal, message.method);
     if (!sent || !sessionGone(reply)) return reply;
     if (this.sessionId === sent) {
+      // the first message to find this session gone records the reset
       this.sessionId = undefined;
       this.needsSession = true;
+      this.generation++;
     }
     const failure = await this.renew();
     if (failure) return { kind: "failed", failure };
-    if (toolCall) return expired();
+    if (toolCall) return { kind: "sessionExpired", generation: this.generation };
     if (signal?.aborted) return { kind: "cancelled" };
-    // anything else is resent; the reset stays pending for the next tool call
     return this.post(message.raw, signal, message.method);
   }
 
@@ -168,14 +177,18 @@ export class HeartClient {
       // a new initialize starts over; the session it replaces is ended, not leaked
       await this.endSession();
       this.needsSession = false;
-      this.resetPending = false;
       this.initializeParams = message.params;
       this.protocolVersion = undefined;
       const reply = await this.post(message.raw, undefined, "initialize");
       if (reply.kind === "messages") this.protocolVersion = answeredVersion(reply.messages, message.id!);
-      // Anytype mints a curated session before it checks the params: a refused
-      // initialize must not leave one behind for later calls to use
-      if (!initializeSucceeded(reply, message.id!)) await this.endSession();
+      if (initializeSucceeded(reply, message.id!)) {
+        // the client started afresh: it holds no numbers from an earlier session
+        this.delivered = this.generation;
+      } else {
+        // Anytype mints a curated session before it checks the params, and a
+        // body can break after the session header arrived: neither may linger
+        await this.endSession();
+      }
       return reply;
     };
     const running = run();
@@ -195,27 +208,38 @@ export class HeartClient {
     return this.renewal;
   }
 
+  /**
+   * A renewal is complete only when both initialize and notifications/initialized
+   * have been answered; until then every message that needs the session waits
+   * for it. Any failure ends whatever session it half-opened, and the next
+   * message tries again.
+   */
   private async openSession(): Promise<HeartFailure | undefined> {
     if (this.closing) return { kind: "closed" };
     if (!this.needsSession) return undefined;
+    const failure = await this.initializeAgain();
+    if (failure) {
+      await this.endSession();
+      return failure;
+    }
+    this.needsSession = false;
+    return undefined;
+  }
+
+  private async initializeAgain(): Promise<HeartFailure | undefined> {
     const id = `"anytype-mcp-renew-${++this.renewals}"`;
     const params = JSON.stringify(this.initializeParams ?? {});
     const reply = await this.post(`{"jsonrpc":"2.0","id":${id},"method":"initialize","params":${params}}`);
     if (reply.kind === "failed") return reply.failure;
+    if (reply.kind === "rpcError") return { kind: "rejected", message: reply.message };
     const answer = reply.kind === "messages" ? reply.messages.find((m) => idOf(m) && sameId(idOf(m)!, id)) : undefined;
     if (answer && isObject(answer.parsed.error)) {
-      await this.endSession();
       const said = boundedText(answer.parsed.error.message);
       return { kind: "rejected", message: said ? this.redact(said) : "no details" };
     }
-    if (!answer || !this.sessionId) {
-      return { kind: "unreadable", status: 200, detail: "initialize opened no session" };
-    }
-    this.needsSession = false;
-    this.resetCount++;
-    this.resetPending = true;
-    await this.post('{"jsonrpc":"2.0","method":"notifications/initialized"}');
-    return undefined;
+    if (!answer || !this.sessionId) return { kind: "unreadable", status: 200, detail: "initialize opened no session" };
+    const acknowledged = await this.post('{"jsonrpc":"2.0","method":"notifications/initialized"}');
+    return acknowledged.kind === "failed" ? acknowledged.failure : undefined;
   }
 
   private async endSession(): Promise<void> {
@@ -264,6 +288,10 @@ export class HeartClient {
         redirect: "manual",
         signal: deadline.signal,
       });
+      // recorded as soon as the headers arrive: if the body then breaks, the
+      // session still exists on Anytype's side and must be ended
+      const session = response.headers.get("mcp-session-id");
+      if (session) this.sessionId = session;
       text = await readBounded(response, response.ok ? MAX_REPLY_BYTES : MAX_ERROR_BYTES);
     } catch (error) {
       if (signal?.aborted) return { kind: "cancelled" };
@@ -277,33 +305,47 @@ export class HeartClient {
   }
 
   private interpret(response: Response, body: string | undefined): HeartReply {
-    const session = response.headers.get("mcp-session-id");
-    if (session) this.sessionId = session;
     const status = response.status;
     if (status === 202) return { kind: "accepted" };
     if (status >= 300 && status < 400) return { kind: "failed", failure: { kind: "redirect", status } };
+    // a refusal is never relayed as it came, whatever its shape: only Anytype's
+    // documented parts are kept, bounded and with the credentials redacted
+    if (!response.ok) {
+      const json = body === undefined ? undefined : parseJson(body);
+      const rpc = status === 400 ? envelopeError(json, this.redact) : undefined;
+      if (rpc) return rpc;
+      return {
+        kind: "failed",
+        failure: {
+          kind: "http",
+          status,
+          message: anytypeError(json, status, this.redact)?.message,
+          routeMissing: status === 404 && body !== undefined && json === undefined,
+        },
+      };
+    }
     if (body === undefined) {
       return { kind: "failed", failure: { kind: "unreadable", status, detail: "the response is too large" } };
     }
     const type = (response.headers.get("content-type") ?? "").toLowerCase();
     const messages = type.includes("text/event-stream") ? parseEventStream(body) : parseJsonMessages(body);
     if (messages.length > 0) return { kind: "messages", messages };
-    if (response.ok) {
-      if (body.trim() === "") return { kind: "accepted" };
-      return { kind: "failed", failure: { kind: "unreadable", status, detail: `content-type ${type || "none"}` } };
-    }
-    const json = parseJson(body);
-    return {
-      kind: "failed",
-      failure: {
-        kind: "http",
-        status,
-        // only Anytype's own error shape is quoted, its message bounded and with the key redacted
-        message: anytypeError(json, status, this.redact)?.message,
-        routeMissing: status === 404 && json === undefined,
-      },
-    };
+    if (body.trim() === "") return { kind: "accepted" };
+    return { kind: "failed", failure: { kind: "unreadable", status, detail: `content-type ${type || "none"}` } };
   }
+}
+
+/**
+ * Anytype's answer to a malformed envelope: HTTP 400 whose body is a JSON-RPC
+ * error (wrapper.ClassifyMessage). Its code must be in JSON-RPC's reserved
+ * range; the message is bounded and redacted; nothing else (data) is kept.
+ */
+function envelopeError(json: unknown, redact: (text: string) => string): HeartReply | undefined {
+  if (!isObject(json) || json.jsonrpc !== "2.0" || !isObject(json.error)) return undefined;
+  const { code, message } = json.error;
+  if (typeof code !== "number" || !Number.isInteger(code) || code < -32768 || code > -32000) return undefined;
+  const said = boundedText(message);
+  return { kind: "rpcError", code, message: said ? redact(said) : "invalid request" };
 }
 
 /**

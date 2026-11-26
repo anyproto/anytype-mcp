@@ -5,7 +5,7 @@
 
 import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { copyFile, link, mkdir, open, realpath, unlink, type FileHandle } from "node:fs/promises";
+import { link, mkdir, open, realpath, unlink, type FileHandle } from "node:fs/promises";
 import { basename, extname, isAbsolute, join, relative, resolve, sep, win32 } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -87,7 +87,7 @@ export class FilesRoot {
       const counted = Readable.fromWeb(body);
       counted.on("data", (chunk: Buffer) => (size += chunk.length));
       await pipeline(counted, handle.createWriteStream(), { signal });
-      const path = await publish(temp, root, safeName(name));
+      const path = await publish(temp, root, safeName(name), this.dir);
       // reported under the root as configured, the name the user knows it by
       return { path: join(this.dir, basename(path)), size };
     } catch (error) {
@@ -106,12 +106,13 @@ function inside(root: string, path: string): boolean {
 }
 
 /**
- * Gives the finished temporary file its name: a hard link, which is atomic and
- * fails rather than replace an existing entry; on a filesystem without hard
- * links, an exclusive copy, which also never replaces one. Numbered on
- * collision.
+ * Gives the finished temporary file its name with a hard link: atomic, and it
+ * fails rather than replace an existing entry, so a file appears under its
+ * name only complete and never over another. Numbered on collision. Without
+ * hard links (FAT, exFAT) there is no such operation, and the download fails
+ * rather than appear partially under its name.
  */
-async function publish(temp: string, root: string, name: string): Promise<string> {
+async function publish(temp: string, root: string, name: string, shown: string): Promise<string> {
   const ext = extensionOf(name);
   const stem = name.slice(0, name.length - ext.length) || "download";
   const candidates = [`${stem}${ext}`];
@@ -124,16 +125,14 @@ async function publish(temp: string, root: string, name: string): Promise<string
       return path;
     } catch (error) {
       if (errorCode(error) === "EEXIST") continue;
-      try {
-        await copyFile(temp, path, constants.COPYFILE_EXCL);
-        return path;
-      } catch (copyError) {
-        if (errorCode(copyError) === "EEXIST") continue;
-        throw copyError;
-      }
+      throw new RootError(
+        `the download could not be saved in ${shown}: publishing it needs a hard link, which failed ` +
+          `(${errorCode(error) ?? "error"}). Ask the user to set ANYTYPE_MCP_FILES_DIR to a directory on a ` +
+          "filesystem with hard links (not FAT or exFAT); nothing was saved.",
+      );
     }
   }
-  throw new RootError("no free file name for the download");
+  throw new RootError(`no free file name for the download in ${shown}`);
 }
 
 function errorCode(error: unknown): string | undefined {
@@ -146,9 +145,17 @@ export function extensionOf(name: string): string {
   return /^\.[A-Za-z0-9]{1,16}$/.test(ext) ? ext : "";
 }
 
+/** Filesystems allow 255 bytes per name (ext4, APFS) or 255 UTF-16 units (NTFS), which bytes bound too. */
+const MAX_NAME_BYTES = 255;
+/** Room for the collision suffix: " (100)" is 6 bytes, "-xxxxxxxx" 9. */
+const SUFFIX_BYTES = 10;
+/** And a short name keeps the whole path within Windows' default limit. */
+const MAX_NAME_CHARS = 120;
+
 /**
  * A file name safe on every platform: no separators, no device names, nothing
- * hidden, at most 120 characters with the extension kept when shortening.
+ * hidden. The stem is shortened by code points so that it, the extension and
+ * a collision suffix stay within 255 UTF-8 bytes and 120 characters.
  */
 export function safeName(name: string): string {
   const cleaned = name
@@ -156,12 +163,28 @@ export function safeName(name: string): string {
     .replace(/[\u0000-\u001f\u007f<>:"/\\|?*]+/g, "_")
     .replace(/^[\s.]+|[\s.]+$/g, "");
   const ext = extensionOf(cleaned);
-  let stem = cleaned
-    .slice(0, cleaned.length - ext.length)
-    .slice(0, 120 - ext.length)
-    .replace(/[\s.]+$/g, "");
+  let stem = shorten(
+    cleaned.slice(0, cleaned.length - ext.length),
+    MAX_NAME_BYTES - SUFFIX_BYTES - Buffer.byteLength(ext),
+    MAX_NAME_CHARS - ext.length,
+  ).replace(/[\s.]+$/g, "");
   if (!stem || /^(con|prn|aux|nul|com\d|lpt\d)$/i.test(stem.split(".")[0])) stem = "download";
   return `${stem}${ext}`;
+}
+
+/** The longest prefix within both limits, never splitting a code point. */
+function shorten(text: string, maxBytes: number, maxChars: number): string {
+  let out = "";
+  let bytes = 0;
+  let chars = 0;
+  for (const point of text) {
+    const size = Buffer.byteLength(point);
+    if (bytes + size > maxBytes || chars + point.length > maxChars) break;
+    out += point;
+    bytes += size;
+    chars += point.length;
+  }
+  return out;
 }
 
 /**

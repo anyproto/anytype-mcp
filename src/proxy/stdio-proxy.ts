@@ -76,6 +76,8 @@ export class StdioProxy {
   /** Settles once the latest initialize has been answered; everything else waits for it. */
   private ready: Promise<void> = Promise.resolve();
   private readonly work = new Set<Promise<void>>();
+  /** Aborts forwarded notifications and responses on a signal (stdin EOF drains them instead). */
+  private readonly shutdown = new AbortController();
   /** False once shutdown has begun: later frames are dropped, not started. */
   private accepting = true;
   /** How the latest initialize went; after a refused one, only ping and initialize are served. */
@@ -120,10 +122,10 @@ export class StdioProxy {
     if (message.kind === "request") {
       const key = idKey(message.id!);
       const controller = new AbortController();
-      // a session reset after this point means the call waited across it
-      const seenResets = this.heart.resets;
+      // which session resets the client had been told about when this call arrived
+      const seenDelivered = this.heart.deliveredResets;
       const done = this.ready
-        .then(() => (controller.signal.aborted ? undefined : this.request(message, controller.signal, seenResets)))
+        .then(() => (controller.signal.aborted ? undefined : this.request(message, controller.signal, seenDelivered)))
         .finally(() => {
           if (this.pending.get(key)?.controller === controller) this.pending.delete(key);
         });
@@ -152,7 +154,11 @@ export class StdioProxy {
    */
   async close({ abort = false } = {}): Promise<void> {
     this.stop();
-    if (abort) this.pending.forEach((p) => p.controller.abort());
+    if (abort) {
+      this.pending.forEach((p) => p.controller.abort());
+      // notifications and client responses too, so a stalled one cannot hold back the DELETE
+      this.shutdown.abort();
+    }
     await Promise.allSettled([...this.work]);
     await this.heart.close();
   }
@@ -178,7 +184,7 @@ export class StdioProxy {
     });
   }
 
-  private async request(request: Inbound, signal: AbortSignal, seenResets: number): Promise<void> {
+  private async request(request: Inbound, signal: AbortSignal, seenDelivered: number): Promise<void> {
     if (this.initialization === "failed" && request.method !== "ping") {
       // a call queued behind a refused initialize must not run (MCP lifecycle)
       this.fail(request, "initialize did not succeed; send initialize again before other requests");
@@ -190,7 +196,7 @@ export class StdioProxy {
       if (!signal.aborted) this.write(frameResult(request.id!, result));
       return;
     }
-    const reply = await this.heart.send(request, signal, seenResets);
+    const reply = await this.heart.send(request, signal, seenDelivered);
     // a cancelled request is not answered (MCP cancellation)
     if (signal.aborted) return;
     this.relay(request, reply, request.method === "tools/list" ? (result) => this.withLocalTools(result) : undefined);
@@ -208,8 +214,9 @@ export class StdioProxy {
 
   /** Notifications and client responses: Anytype acknowledges them; anything it answers is passed on. */
   private async forward(message: Inbound): Promise<void> {
-    const reply = await this.heart.send(message);
+    const reply = await this.heart.send(message, this.shutdown.signal);
     if (reply.kind === "messages") reply.messages.forEach((m) => this.write(m.raw));
+    if (reply.kind === "rpcError") this.log(`Anytype refused ${message.method ?? "a response"}: ${reply.message}`);
     if (reply.kind === "failed") {
       this.log(
         `could not deliver ${message.method ?? "a response"} to Anytype: ${describeFailure(reply.failure, this.heart)}`,
@@ -229,7 +236,12 @@ export class StdioProxy {
         this.fail(request, "Anytype accepted the request without answering it");
         return;
       case "sessionExpired":
+        // relay runs only for a live (not cancelled) request: the warning is written now, so the client knows
         this.fail(request, SESSION_EXPIRED);
+        this.heart.acknowledgeReset(reply.generation);
+        return;
+      case "rpcError":
+        this.write(frameError(request.id!, reply.code, reply.message));
         return;
       case "failed":
         this.fail(request, describeFailure(reply.failure, this.heart));

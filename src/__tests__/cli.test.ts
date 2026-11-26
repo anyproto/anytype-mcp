@@ -99,6 +99,18 @@ describe("main", () => {
   });
 });
 
+describe("the retired spec argument", () => {
+  it("names the origin to set before removing it, and the pin that keeps it", async () => {
+    await main(["run", "http://127.0.0.1:31012/v2/docs/openapi.json"]);
+
+    const message = String(started().configError);
+    expect(message).toMatch(
+      /set ANYTYPE_API_BASE_URL to the API origin you used, probably http:\/\/127\.0\.0\.1:31012/,
+    );
+    expect(message).toMatch(/keep your arguments and pin version 2: .*@anyproto\/anytype-mcp@2\.0\.3", "run", <spec>/);
+  });
+});
+
 describe("get-key", () => {
   it("refuses a version-2 spec argument before pairing anywhere", async () => {
     const exit = vi.spyOn(process, "exit").mockImplementation((() => {}) as any);

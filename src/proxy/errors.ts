@@ -24,7 +24,8 @@ export function anytypeError(
 ): AnytypeError | undefined {
   if (!isObject(body) || typeof body.code !== "string" || typeof body.message !== "string") return undefined;
   if (body.object !== undefined && body.object !== "error") return undefined;
-  if (body.status !== undefined && body.status !== status) return undefined;
+  // both Anytype shapes always carry the status; a body without it is not Anytype's
+  if (body.status !== status) return undefined;
   const error: AnytypeError = { code: bounded(body.code, 100, redact), message: bounded(body.message, 500, redact) };
   if (Array.isArray(body.issues)) {
     error.issues = body.issues

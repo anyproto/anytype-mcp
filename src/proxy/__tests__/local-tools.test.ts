@@ -396,6 +396,59 @@ describe("error bodies", () => {
   });
 });
 
+describe("upload receipts", () => {
+  it.each([
+    ["a login page", 200, "text/html", "<html>Please sign in</html>", false],
+    ["a 201 without an id", 201, "application/json", '{"object":"file"}', false],
+    ["a 200 for a committed upload", 200, "application/json", '{"object":"file","id":"x"}', false],
+    ["a dry run without dry_run", 200, "application/json", '{"ok":true}', true],
+  ])("does not report %s as a success, nor echo it", async (_, status, type, body, dryRun) => {
+    const local = await tools({
+      intercept: (request, res) => {
+        if (!request.path.startsWith("/v2/spaces/s/files")) return false;
+        res.writeHead(status, { "Content-Type": type }).end(body);
+        return true;
+      },
+    });
+    await mkdir(root, { recursive: true });
+    await writeFile(join(root, "a.txt"), "x");
+
+    const result = await local.call("upload_local_file", {
+      space_id: "s",
+      path: "a.txt",
+      ...(dryRun ? { dry_run: true } : {}),
+    });
+
+    expect(result.isError).toBe(true);
+    expect(text(result)).toMatch(/upload outcome is unconfirmed: Anytype answered HTTP \d+/);
+    expect(text(result)).not.toContain(body);
+  });
+});
+
+describe("long names", () => {
+  it("stays within 255 UTF-8 bytes with room for the collision suffix, never splitting a character", () => {
+    const name = safeName(`${"報".repeat(83)}.pdf`);
+    const worst = name.replace(/\.pdf$/, " (100).pdf");
+
+    expect(Buffer.byteLength(worst)).toBeLessThanOrEqual(255);
+    expect(name.endsWith(".pdf")).toBe(true);
+    expect(safeName(`${"😀".repeat(100)}.txt`)).toMatch(/^(?:😀)+\.txt$/u);
+  });
+
+  it("downloads a long international name twice", async () => {
+    const local = await tools({
+      files: { f: { name: `${"報".repeat(83)}.pdf`, type: "application/pdf", bytes: Buffer.from("x") } },
+    });
+
+    const first = await local.call("download_file", { space_id: "s", file_id: "f" });
+    const second = await local.call("download_file", { space_id: "s", file_id: "f" });
+
+    expect(first.isError).toBeUndefined();
+    expect(second.isError).toBeUndefined();
+    expect((second.structuredContent as { filename: string }).filename).toMatch(/ \(2\)\.pdf$/);
+  });
+});
+
 describe.skipIf(process.platform === "win32")("special files", () => {
   it("refuses a FIFO without waiting for a writer", async () => {
     const local = await tools();

@@ -12,10 +12,26 @@ Environment:
   ANYTYPE_MCP_TIER        small, large or full, when --tier is not given
   ANYTYPE_MCP_FILES_DIR   the only directory upload_local_file and download_file use (default ~/.anytype-mcp/files)`;
 
-/** Version 2 took an OpenAPI document to generate tools from; that path is gone. */
-const SPEC_ARGUMENT_GONE =
-  "anytype-mcp 3 no longer generates tools from an OpenAPI document: remove the spec argument to use the MCP " +
-  "server built into Anytype (heart >= 0.51.6), or pin @anyproto/anytype-mcp@2.0.3 for an older Anytype.";
+/**
+ * Version 2 took an OpenAPI document to generate tools from; that path is gone.
+ * The document also chose the server (its servers[0].url), so removing it
+ * without setting ANYTYPE_API_BASE_URL would send the key to the default port.
+ */
+export function specArgumentGone(spec: string): string {
+  let origin = "the API origin you used (the spec's servers[0].url)";
+  try {
+    const url = new URL(spec);
+    if (url.protocol === "http:" || url.protocol === "https:")
+      origin = `the API origin you used, probably ${url.origin}`;
+  } catch {
+    // a file path: the origin is in the document
+  }
+  return (
+    "anytype-mcp 3 no longer generates tools from an OpenAPI document. To use the MCP server built into Anytype " +
+    `(heart >= 0.51.6), set ANYTYPE_API_BASE_URL to ${origin}, then remove the spec argument. ` +
+    'For an older Anytype, keep your arguments and pin version 2: "-y", "@anyproto/anytype-mcp@2.0.3", "run", <spec>.'
+  );
+}
 
 /** Splits `--tier <name>` / `--tier=<name>` from the positional arguments. */
 export function parseArgs(args: string[]): { positional: string[]; tier?: string } {
@@ -91,7 +107,7 @@ export async function main(args: string[] = process.argv.slice(2)) {
   }
   const [command, ...rest] = parsed.positional;
   if (!command || command === "run") {
-    runProxy(parsed.tier, rest.length > 0 ? SPEC_ARGUMENT_GONE : undefined);
+    runProxy(parsed.tier, rest.length > 0 ? specArgumentGone(rest[0]) : undefined);
   } else if (command === "get-key") {
     if (rest.length > 0) {
       // version 2 took a spec here and paired with the server it named; pairing elsewhere would be a surprise

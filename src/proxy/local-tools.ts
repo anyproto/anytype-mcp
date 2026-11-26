@@ -189,8 +189,20 @@ export class LocalFileTools {
       });
       if (!response.ok) return toolError(await restError(response, this.redact));
       const text = (await readBounded(response, 1 << 20)) ?? "";
-      const parsed = parseObject(text);
-      return { content: [{ type: "text", text }], ...(parsed ? { structuredContent: parsed } : {}) };
+      const receipt = parseObject(text);
+      // Anytype's receipt: 201 with the stored file's id, or 200 { dry_run: true } for a dry run.
+      // Anything else (a login page from a proxy, a cut-off body) is not proof the upload happened.
+      const confirmed =
+        args.dry_run === true
+          ? response.status === 200 && receipt?.dry_run === true
+          : response.status === 201 && typeof receipt?.id === "string" && receipt.id !== "";
+      if (!confirmed) {
+        return toolError(
+          `the upload outcome is unconfirmed: Anytype answered HTTP ${response.status} without its upload receipt. ` +
+            "Check the space for the file before uploading it again.",
+        );
+      }
+      return { content: [{ type: "text", text }], structuredContent: receipt };
     } finally {
       await handle.close().catch(() => {});
     }

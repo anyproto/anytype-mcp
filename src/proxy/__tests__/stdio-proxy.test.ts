@@ -500,6 +500,153 @@ describe("stdio proxy, round 2 guards", () => {
   }, 20_000);
 });
 
+describe("stdio proxy session resets (one state machine)", () => {
+  function gate() {
+    let open!: () => void;
+    const opened = new Promise<void>((resolve) => (open = resolve));
+    return { opened, open };
+  }
+  const listSpaces = (id: number) => ({
+    jsonrpc: "2.0",
+    id,
+    method: "tools/call",
+    params: { name: "list_spaces", arguments: {} },
+  });
+
+  it("keeps the warning when the call that met the expiry is cancelled during the renewal", async () => {
+    const hold = gate();
+    let holding = false;
+    let renewing!: () => void;
+    const renewalStarted = new Promise<void>((resolve) => (renewing = resolve));
+    const call = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "ok" }] });
+    const h = await connect({
+      tier: "small",
+      heart: {
+        call,
+        intercept: async (request) => {
+          if (holding && request.body.toString().includes('"initialize"')) {
+            renewing();
+            await hold.opened;
+          }
+          return false;
+        },
+      },
+    });
+    await h.initialize();
+    heart!.expireSessions();
+    holding = true;
+
+    h.send(listSpaces(2));
+    await renewalStarted;
+    h.send({ jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: 2 } });
+    hold.open();
+    const warned = await h.request(3, "tools/call", { name: "list_spaces", arguments: {} });
+    const next = await h.request(4, "tools/call", { name: "list_spaces", arguments: {} });
+
+    expect(h.received.some((m) => m.id === 2)).toBe(false);
+    expect(warned.result.content[0].text).toBe(SESSION_EXPIRED);
+    expect(next.result.content[0].text).toBe("ok");
+    expect(call).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not let an id-less tools/call take the warning", async () => {
+    const call = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "ok" }] });
+    const h = await connect({ tier: "small", heart: { call } });
+    await h.initialize();
+    heart!.expireSessions();
+    await h.request(2, "ping");
+
+    h.send({ jsonrpc: "2.0", method: "tools/call", params: { name: "list_spaces", arguments: {} } });
+    await settle(50);
+    const warned = await h.request(3, "tools/call", { name: "list_spaces", arguments: {} });
+
+    expect(warned.result.content[0].text).toBe(SESSION_EXPIRED);
+    expect(call).not.toHaveBeenCalled();
+  });
+
+  it("refuses both of two calls that arrive while the renewal's notifications/initialized is pending", async () => {
+    const hold = gate();
+    let holding = false;
+    let acking!: () => void;
+    const ackPending = new Promise<void>((resolve) => (acking = resolve));
+    const call = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "ok" }] });
+    const h = await connect({
+      tier: "small",
+      heart: {
+        call,
+        intercept: async (request) => {
+          if (holding && request.body.toString().includes("notifications/initialized")) {
+            acking();
+            await hold.opened;
+          }
+          return false;
+        },
+      },
+    });
+    await h.initialize();
+    heart!.expireSessions();
+    holding = true;
+
+    h.send({ jsonrpc: "2.0", id: 2, method: "ping" });
+    await ackPending;
+    h.input.write(JSON.stringify(listSpaces(3)) + "\n" + JSON.stringify(listSpaces(4)) + "\n");
+    await settle(50);
+    hold.open();
+    const [three, four] = [await h.answer(3), await h.answer(4)];
+    const next = await h.request(5, "tools/call", { name: "list_spaces", arguments: {} });
+
+    expect(three.result.content[0].text).toBe(SESSION_EXPIRED);
+    expect(four.result.content[0].text).toBe(SESSION_EXPIRED);
+    expect(next.result.content[0].text).toBe("ok");
+    expect(call).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not let a stalled notification hold back the DELETE on a signal", async () => {
+    const h = await connect({
+      tier: "small",
+      heart: {
+        intercept: async (request) => {
+          if (request.body.toString().includes("notifications/initialized")) await settle(5_000);
+          return false;
+        },
+      },
+    });
+    await h.initialize();
+    h.send({ jsonrpc: "2.0", method: "notifications/initialized" });
+    await settle(50);
+
+    const started = Date.now();
+    await h.proxy.abort();
+
+    expect(Date.now() - started).toBeLessThan(1_500);
+    expect(heart!.requests.at(-1)).toMatchObject({ method: "DELETE", headers: { "mcp-session-id": "session-1" } });
+  }, 10_000);
+
+  it("answers Anytype's HTTP 400 envelope error under the request's own id, without its data", async () => {
+    const h = await connect({
+      heart: {
+        intercept: (request, res) => {
+          if (!request.body.toString().includes('"ping"')) return false;
+          res.writeHead(400, { "Content-Type": "application/json" }).end(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: null,
+              error: { code: -32600, message: "bad", data: { authorization: `Bearer ${FAKE_KEY}` } },
+            }),
+          );
+          return true;
+        },
+      },
+    });
+    await h.initialize();
+
+    const answer = await h.request(2, "ping");
+
+    expect(answer).toEqual({ jsonrpc: "2.0", id: 2, error: { code: -32600, message: "bad" } });
+    expect(h.lines.join("\n")).not.toContain(FAKE_KEY);
+  });
+});
+
 describe("chooseVersion", () => {
   it("echoes what it carries, steps down to the newest older one otherwise, else keeps Anytype's", () => {
     expect(chooseVersion("2025-06-18", "2025-06-18")).toBe("2025-06-18");
