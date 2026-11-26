@@ -46,6 +46,8 @@ export interface LocalFileToolsOptions {
   headers?: Record<string, string>;
   filesDir: string;
   fetch?: typeof fetch;
+  /** Default 10 minutes; shorter in tests. */
+  transferTimeoutMs?: number;
 }
 
 class ArgumentError extends Error {}
@@ -64,6 +66,7 @@ export class LocalFileTools {
   private readonly baseUrl: string;
   private readonly headers: Record<string, string>;
   private readonly fetchImpl: typeof fetch;
+  private readonly timeoutMs: number;
   private readonly root: FilesRoot;
   private readonly redact: (text: string) => string;
   private readonly definitions: JsonObject[];
@@ -73,6 +76,7 @@ export class LocalFileTools {
     this.baseUrl = options.baseUrl;
     this.headers = options.headers ?? {};
     this.fetchImpl = options.fetch ?? fetch;
+    this.timeoutMs = options.transferTimeoutMs ?? TRANSFER_TIMEOUT_MS;
     this.root = new FilesRoot(options.filesDir);
     this.redact = redactor(this.headers);
     this.definitions = definitions(options.filesDir);
@@ -90,9 +94,13 @@ export class LocalFileTools {
     return this.active.has(name);
   }
 
+  private minutes(): number {
+    return Math.round(this.timeoutMs / 60_000);
+  }
+
   /** A tools/call result; failures are in-band so the model can read them. */
   async call(name: string, args: JsonObject, signal?: AbortSignal): Promise<JsonObject> {
-    const deadline = withDeadline(signal, TRANSFER_TIMEOUT_MS);
+    const deadline = withDeadline(signal, this.timeoutMs);
     try {
       switch (name) {
         case "download_file":
@@ -104,8 +112,7 @@ export class LocalFileTools {
       }
     } catch (error) {
       if (signal?.aborted) throw error;
-      if (deadline.timedOut())
-        return toolError(`the transfer did not finish within ${TRANSFER_TIMEOUT_MS / 60_000} minutes`);
+      if (deadline.timedOut()) return toolError(`the transfer did not finish within ${this.minutes()} minutes`);
       if (error instanceof ArgumentError || error instanceof RootError || error instanceof TransferError) {
         return toolError(error.message);
       }
@@ -204,6 +211,14 @@ export class LocalFileTools {
           return toolError(
             "the upload outcome is unconfirmed: the connection to Anytype closed before it answered. " +
               "Check the space for the file before uploading it again.",
+          );
+        }
+        // the deadline passed after the whole file was sent, before any answer: it may have been stored
+        // (a cancellation passes here too, but a cancelled call is not answered)
+        if (signal.aborted && form.sent()) {
+          return toolError(
+            `the upload outcome is unconfirmed: Anytype did not answer within ${this.minutes()} minutes after the ` +
+              "whole file was sent. Check the space for the file before uploading it again.",
           );
         }
         throw error;

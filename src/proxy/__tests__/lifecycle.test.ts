@@ -155,6 +155,63 @@ describe("a session reset is delivered only once its warning has left the proces
     expect(run).toHaveBeenCalledTimes(1);
     expect(heart!.posted.filter((m) => m.method === "tools/call").map((m) => m.id)).toEqual([2]);
   });
+
+  it("shuts down and ends the session once stdout fails, though stdin stays open", async () => {
+    const p = await proxy("small");
+    p.init();
+    await settle();
+    p.output.failing = true;
+
+    p.call(2); // runs, but its answer cannot be written: the host stopped reading
+    const closed = await Promise.race([p.running.closed.then(() => true), settle(1_500).then(() => false)]);
+
+    expect(closed).toBe(true);
+    expect(heart!.requests.at(-1)).toMatchObject({ method: "DELETE", headers: { "mcp-session-id": "session-1" } });
+    expect(heart!.sessions.size).toBe(0);
+  });
+});
+
+describe("a dispatched upload whose deadline passes before any answer", () => {
+  it("is unconfirmed once the whole file was sent", async () => {
+    // the whole upload is read; no answer comes before the deadline
+    heart = await new FakeHeart({ intercept: (request) => request.path.endsWith("/files") }).start();
+    dir = await mkdtemp(join(tmpdir(), "anytype-mcp-lifecycle-"));
+    await writeFile(join(dir, "a.txt"), "x");
+    const tools = new LocalFileTools({ baseUrl: heart.url, headers: auth, filesDir: dir, transferTimeoutMs: 200 });
+
+    const result = await tools.call("upload_local_file", { space_id: "s", path: "a.txt" });
+
+    expect(result.isError).toBe(true);
+    expect((result.content as Array<{ text: string }>)[0].text).toMatch(
+      /^the upload outcome is unconfirmed: Anytype did not answer within \d+ minutes after the whole file was sent\. Check the space for the file before uploading it again\.$/,
+    );
+  });
+
+  it("is still a plain unfinished transfer while the file was being sent", async () => {
+    dir = await mkdtemp(join(tmpdir(), "anytype-mcp-lifecycle-"));
+    await writeFile(join(dir, "a.txt"), "x");
+    // takes the first part of the upload, then stalls until the deadline aborts it
+    const stalled = (async (_url: unknown, init?: RequestInit) => {
+      await (init!.body as unknown as AsyncIterable<unknown>)[Symbol.asyncIterator]().next();
+      return new Promise<Response>((_resolve, reject) =>
+        init!.signal!.addEventListener("abort", () => reject(new Error("aborted"))),
+      );
+    }) as typeof fetch;
+    const tools = new LocalFileTools({
+      baseUrl: "http://127.0.0.1:9",
+      headers: auth,
+      filesDir: dir,
+      fetch: stalled,
+      transferTimeoutMs: 100,
+    });
+
+    const result = await tools.call("upload_local_file", { space_id: "s", path: "a.txt" });
+
+    expect(result.isError).toBe(true);
+    expect((result.content as Array<{ text: string }>)[0].text).toMatch(
+      /^the transfer did not finish within \d+ minutes$/,
+    );
+  });
 });
 
 describe("a renewal's notifications/initialized", () => {

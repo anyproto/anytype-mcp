@@ -2,7 +2,7 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Tier } from "../config";
-import { describeFailure, HeartClient, parseEventStream, type HeartReply } from "../heart-client";
+import { describeFailure, HeartClient, parseEventStream, type HeartFailure, type HeartReply } from "../heart-client";
 import { classify, type Inbound } from "../jsonrpc";
 import { FAKE_KEY, FakeHeart, type FakeHeartOptions } from "./fake-heart";
 
@@ -298,12 +298,27 @@ describe("HeartClient failures", () => {
     expect(reply).toEqual({ kind: "failed", failure: { kind: "unreachable", code: "ECONNREFUSED" } });
   });
 
-  it("gives up on a server that never answers", async () => {
+  it("gives up on a tool call that gets no answer, and calls its outcome unconfirmed: it was sent", async () => {
     heart = await new FakeHeart({ call: () => new Promise(() => {}) }).start();
     const client = new HeartClient({ baseUrl: heart.url, tier: "full", headers: auth, timeoutMs: 100 });
     await client.send(initialize());
 
-    expect(await client.send(call(2))).toEqual({ kind: "failed", failure: { kind: "timeout", ms: 100 } });
+    const reply = await client.send(call(2));
+
+    expect(reply).toEqual({ kind: "failed", failure: { kind: "lost", ms: 100 } });
+    expect(describeFailure((reply as { failure: HeartFailure }).failure, client)).toMatch(
+      /^Anytype did not answer within \d+ s after the request was sent\. The outcome is unconfirmed: .* before repeating it\.$/,
+    );
+  });
+
+  it("gives up on any other message that gets no answer as a plain timeout", async () => {
+    heart = await new FakeHeart({
+      intercept: (request) => request.body.toString().includes('"ping"'), // never answered
+    }).start();
+    const client = new HeartClient({ baseUrl: heart.url, tier: "full", headers: auth, timeoutMs: 100 });
+    await client.send(initialize());
+
+    expect(await client.send(ping(2))).toEqual({ kind: "failed", failure: { kind: "timeout", ms: 100 } });
   });
 
   it("reports a caller's abort as cancelled, not as a failure", async () => {

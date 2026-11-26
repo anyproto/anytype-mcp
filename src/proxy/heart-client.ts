@@ -23,7 +23,8 @@ export type HeartFailure =
   | { kind: "unreachable"; code?: string }
   /**
    * The message was sent but its answer was lost, so a tool call may have run:
-   * status when Anytype's headers had arrived, ms when the deadline cut the reply.
+   * status when Anytype's headers had arrived, ms when the deadline cut it off
+   * (before any answer, only a tool call is reported so).
    */
   | { kind: "lost"; status?: number; code?: string; ms?: number }
   | { kind: "timeout"; ms: number }
@@ -339,7 +340,11 @@ export class HeartClient {
         });
       } catch (error) {
         if (signal?.aborted) return { kind: "cancelled" };
-        if (deadline.timedOut()) return { kind: "failed", failure: { kind: "timeout", ms: this.timeoutMs } };
+        if (deadline.timedOut()) {
+          // a forwarded message goes out whole at once, long before the deadline: a tool call may have run
+          const ms = this.timeoutMs;
+          return { kind: "failed", failure: method === "tools/call" ? { kind: "lost", ms } : { kind: "timeout", ms } };
+        }
         const code = networkCode(error);
         // only a connection that never opened is known to have sent nothing
         if (NEVER_CONNECTED.has(code ?? "")) return { kind: "failed", failure: { kind: "unreachable", code } };
@@ -430,12 +435,17 @@ export function describeFailure(failure: HeartFailure, client: { baseUrl: string
         "the Anytype app, or to set ANYTYPE_API_BASE_URL if it listens elsewhere; changing the call will not help."
       );
     case "lost": {
-      const what =
-        failure.status === undefined
-          ? "The connection to Anytype closed after the request was sent, before Anytype answered" +
-            (failure.code ? ` (${failure.code})` : "")
-          : `Anytype answered HTTP ${failure.status}, but its reply ` +
-            (failure.ms ? `did not finish within ${Math.round(failure.ms / 1000)} s` : "broke off before it was read");
+      const within = `within ${Math.round((failure.ms ?? 0) / 1000)} s`;
+      let what: string;
+      if (failure.status !== undefined) {
+        what = `Anytype answered HTTP ${failure.status}, but its reply `;
+        what += failure.ms ? `did not finish ${within}` : "broke off before it was read";
+      } else if (failure.ms) {
+        what = `Anytype did not answer ${within} after the request was sent`;
+      } else {
+        what = "The connection to Anytype closed after the request was sent, before Anytype answered";
+        if (failure.code) what += ` (${failure.code})`;
+      }
       return (
         `${what}. The outcome is unconfirmed: if this was a tool call, it may have been applied. Check whether ` +
         "it landed (for example, read or list what it changes) before repeating it."

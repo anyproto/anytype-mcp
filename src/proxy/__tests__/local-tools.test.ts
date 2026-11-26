@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { chmod, mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -54,10 +54,18 @@ describe("download_file", () => {
       size: 14,
     });
     expect(await readFile(join(root, "report.pdf"), "utf8")).toBe("%PDF-1.7 hello");
-    expect((await stat(join(root, "report.pdf"))).mode & 0o777).toBe(0o600);
-    expect((await stat(root)).mode & 0o777).toBe(0o700);
     expect(content()).toMatchObject({ method: "GET", path: "/v2/spaces/space-1/files/file-1/content" });
     expect(content().headers.authorization).toBe(`Bearer ${FAKE_KEY}`);
+  });
+
+  // Windows has no POSIX permission bits to check
+  it.skipIf(process.platform === "win32")("creates the root and the file owner-only (0700, 0600)", async () => {
+    const local = await tools({ files: pdf });
+
+    await local.call("download_file", { space_id: "space-1", file_id: "file-1" });
+
+    expect((await stat(join(root, "report.pdf"))).mode & 0o777).toBe(0o600);
+    expect((await stat(root)).mode & 0o777).toBe(0o700);
   });
 
   it("takes the extension from the file object's file_ext before the media type", async () => {
@@ -340,12 +348,12 @@ describe("download safety", () => {
         return true;
       },
     });
-    await mkdir(root, { recursive: true });
-    await chmod(root, 0o500);
+    // a regular file where the root should be: preparing the destination fails for any user, root
+    // included, on any OS (a read-only directory would not stop root)
+    await writeFile(root, "not a directory");
 
     const result = await local.call("download_file", { space_id: "s", file_id: "file-1" });
     await new Promise((resolve) => setTimeout(resolve, 50));
-    await chmod(root, 0o700);
 
     expect(result.isError).toBe(true);
     expect(unfinishedAtClose).toBe(true);

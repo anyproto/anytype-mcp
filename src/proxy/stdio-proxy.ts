@@ -418,13 +418,6 @@ export function startStdioProxy(options: StartOptions): RunningProxy {
   const proxy = new StdioProxy({ heart, localTools, configError: options.configError, log }, (line, written) => {
     output.write(line + "\n", written);
   });
-  // the host going away mid-answer is no reason to crash, but nothing more is started:
-  // answers, warnings included, can no longer reach it
-  output.on("error", (error) => {
-    log(`stdout: ${error.message}`);
-    proxy.stop();
-  });
-
   const reader = readLines(
     input,
     (line) =>
@@ -440,6 +433,12 @@ export function startStdioProxy(options: StartOptions): RunningProxy {
     await proxy.close({ abort: true });
     aborted();
   };
+  // the host stopped reading (EPIPE): no answer can reach it any more, so the proxy shuts
+  // down as on a signal, ending the session, rather than wait for stdin to close
+  output.on("error", (error) => {
+    log(`stdout: ${error.message}`);
+    void abort();
+  });
   const closed = Promise.race([reader.ended.then(() => proxy.close()), abortDone]);
   return { closed, abort };
 }

@@ -200,10 +200,13 @@ export function multipartFile(handle: FileHandle, filename: string) {
       "Content-Type: application/octet-stream\r\n\r\n",
   );
   const tail = Buffer.from(`\r\n--${boundary}--\r\n`);
+  let sent = false;
   async function* parts() {
     yield head;
     for await (const chunk of handle.createReadStream({ autoClose: false })) yield chunk as Buffer;
     yield tail;
+    // asked for more after the tail: the whole body has been handed over
+    sent = true;
   }
-  return { contentType: `multipart/form-data; boundary=${boundary}`, body: parts() };
+  return { contentType: `multipart/form-data; boundary=${boundary}`, body: parts(), sent: () => sent };
 }

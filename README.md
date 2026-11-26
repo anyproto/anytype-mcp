@@ -102,7 +102,7 @@ npm install -g @anyproto/anytype-mcp
 
 ### Custom API Base URL
 
-By default, the server connects to `http://127.0.0.1:31009`. For `anytype-cli` (port `31012`) or other custom base URLs, set `ANYTYPE_API_BASE_URL`:
+By default, the server connects to `http://127.0.0.1:31009`. For `anytype-cli` (port `31012`) or other custom base URLs, set `ANYTYPE_API_BASE_URL`. Ports that Node's `fetch` blocks as a "bad port", such as `6000` or `10080`, do not work here; pick another port.
 
 <details>
 <summary>Example Configuration</summary>
@@ -207,11 +207,16 @@ Version 3 forwards to Anytype's built-in MCP server instead of generating tools 
   - If `ANYTYPE_API_BASE_URL` is already set, keep it.
   - Otherwise, open the spec and set `ANYTYPE_API_BASE_URL` to the API origin in its `servers[0].url`. That is typically `http://127.0.0.1:31009`, or `http://127.0.0.1:31012` for anytype-cli.
 
-  Do not use the address the spec was downloaded from, which can be another host. Without the variable, version 3 sends your key to `http://127.0.0.1:31009`. To keep the 2.x behavior instead, for example with an Anytype older than heart 0.51.6, pin version 2 and keep your arguments as they were:
+  Do not use the address the spec was downloaded from, which can be another host. Without the variable, version 3 sends your key to `http://127.0.0.1:31009`. To keep the 2.x behavior instead, for example with an Anytype older than heart 0.51.6, pin version 2 without a spec argument and let it find its spec. If Anytype does not listen on `31009` (anytype-cli uses `31012`), set `ANYTYPE_API_BASE_URL` too; 2.x then fetches the spec from there and sends the key there:
 
   ```json
-  { "args": ["-y", "@anyproto/anytype-mcp@2.0.3", "run", "http://127.0.0.1:31012/v2/docs/openapi.json"] }
+  {
+    "args": ["-y", "@anyproto/anytype-mcp@2.0.3"],
+    "env": { "ANYTYPE_API_BASE_URL": "http://127.0.0.1:31012" }
+  }
   ```
+
+  Do not pass an explicit spec URL such as `…/v2/docs/openapi.json`. Anytype's spec names `127.0.0.1:31009` as its server whatever port it listens on, so without the variable 2.x would send the key there. An explicit URL also stops 2.x from falling back to the older `/docs/openapi.json`.
 
 ## Development
 
