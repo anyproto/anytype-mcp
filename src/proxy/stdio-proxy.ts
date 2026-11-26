@@ -78,6 +78,7 @@ export class StdioProxy {
   private readonly work = new Set<Promise<void>>();
   /** Aborts forwarded notifications and responses on a signal (stdin EOF drains them instead). */
   private readonly shutdown = new AbortController();
+  private closed?: Promise<void>;
   /** False once shutdown has begun: later frames are dropped, not started. */
   private accepting = true;
   /** How the latest initialize went; after a refused one, only ping and initialize are served. */
@@ -85,7 +86,8 @@ export class StdioProxy {
 
   constructor(
     private readonly options: StdioProxyOptions,
-    private readonly write: (line: string) => void,
+    /** Writes one line; written runs once it has left the process (or failed to). */
+    private readonly write: (line: string, written?: (error?: Error | null) => void) => void,
   ) {
     this.heart = options.heart;
     this.log = options.log ?? (() => {});
@@ -152,15 +154,21 @@ export class StdioProxy {
    * flight are cancelled (a signal). Either way a download in progress
    * removes its partial file and the session is ended.
    */
-  async close({ abort = false } = {}): Promise<void> {
+  close({ abort = false } = {}): Promise<void> {
     this.stop();
     if (abort) {
       this.pending.forEach((p) => p.controller.abort());
       // notifications and client responses too, so a stalled one cannot hold back the DELETE
       this.shutdown.abort();
+      // and a session renewal, which no single caller owns
+      this.heart.shutdown();
     }
-    await Promise.allSettled([...this.work]);
-    await this.heart.close();
+    // one close for every caller: a signal after stdin ended waits for the same DELETE
+    this.closed ??= (async () => {
+      await Promise.allSettled([...this.work]);
+      await this.heart.close();
+    })();
+    return this.closed;
   }
 
   /** Accepts no further frames; work already accepted carries on. Synchronous, for a signal handler. */
@@ -185,9 +193,14 @@ export class StdioProxy {
   }
 
   private async request(request: Inbound, signal: AbortSignal, seenDelivered: number): Promise<void> {
-    if (this.initialization === "failed" && request.method !== "ping") {
-      // a call queued behind a refused initialize must not run (MCP lifecycle)
-      this.fail(request, "initialize did not succeed; send initialize again before other requests");
+    if (this.initialization !== "succeeded" && request.method !== "ping") {
+      // nothing but ping runs before a successful initialize (MCP lifecycle), local tools included
+      this.fail(
+        request,
+        this.initialization === "failed"
+          ? "initialize did not succeed; send initialize again before other requests"
+          : "send initialize, and wait for its result, before other requests",
+      );
       return;
     }
     const local = this.localCall(request);
@@ -237,8 +250,11 @@ export class StdioProxy {
         return;
       case "sessionExpired":
         // relay runs only for a live (not cancelled) request: the warning is written now, so the client knows
-        this.fail(request, SESSION_EXPIRED);
-        this.heart.acknowledgeReset(reply.generation);
+        // delivered only once the warning has left the process; until then calls keep being refused
+        this.fail(request, SESSION_EXPIRED, (error) => {
+          if (error) this.stop();
+          else this.heart.acknowledgeReset(reply.generation);
+        });
         return;
       case "rpcError":
         this.write(frameError(request.id!, reply.code, reply.message));
@@ -282,9 +298,9 @@ export class StdioProxy {
   }
 
   /** A failure the proxy reports itself: in-band on tools/call, a JSON-RPC error elsewhere. */
-  private fail(request: Inbound, text: string): void {
-    if (request.method === "tools/call") this.write(frameResult(request.id!, toolError(text)));
-    else this.write(frameError(request.id!, INTERNAL_ERROR, text));
+  private fail(request: Inbound, text: string, written?: (error?: Error | null) => void): void {
+    if (request.method === "tools/call") this.write(frameResult(request.id!, toolError(text)), written);
+    else this.write(frameError(request.id!, INTERNAL_ERROR, text), written);
   }
 }
 
@@ -383,10 +399,14 @@ export function startStdioProxy(options: StartOptions): RunningProxy {
     tier === "full" && options.filesDir
       ? new LocalFileTools({ baseUrl, headers, filesDir: options.filesDir, fetch: options.fetch })
       : undefined;
-  // the host going away mid-answer is not an error worth crashing on
-  output.on("error", (error) => log(`stdout: ${error.message}`));
-  const proxy = new StdioProxy({ heart, localTools, configError: options.configError, log }, (line) => {
-    output.write(line + "\n");
+  const proxy = new StdioProxy({ heart, localTools, configError: options.configError, log }, (line, written) => {
+    output.write(line + "\n", written);
+  });
+  // the host going away mid-answer is no reason to crash, but nothing more is started:
+  // answers, warnings included, can no longer reach it
+  output.on("error", (error) => {
+    log(`stdout: ${error.message}`);
+    proxy.stop();
   });
 
   const reader = readLines(

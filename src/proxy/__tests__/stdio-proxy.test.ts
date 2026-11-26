@@ -69,6 +69,8 @@ class Host {
 }
 
 const settle = (ms = 100) => new Promise((resolve) => setTimeout(resolve, ms));
+/** A session-reset warning is delivered when its stdout write completes, a moment after the host reads it. */
+const delivered = () => settle(20);
 let heart: FakeHeart | undefined;
 let host: Host | undefined;
 let filesDir: string | undefined;
@@ -370,6 +372,7 @@ describe("stdio proxy on a curated tier", () => {
     heart!.expireSessions();
 
     const expired = await h.request(2, "tools/call", { name: "list_spaces", arguments: {} });
+    await delivered(); // the warning counts once its write has completed
     const next = await h.request(3, "tools/call", { name: "list_spaces", arguments: {} });
 
     expect(expired.result).toEqual({ content: [{ type: "text", text: SESSION_EXPIRED }], isError: true });
@@ -438,6 +441,7 @@ describe("stdio proxy, round 2 guards", () => {
 
     const pinged = await h.request(2, "ping");
     const told = await h.request(3, "tools/call", { name: "list_spaces", arguments: {} });
+    await delivered(); // the warning counts once its write has completed
     const next = await h.request(4, "tools/call", { name: "list_spaces", arguments: {} });
 
     expect(pinged.result).toEqual({});
@@ -541,6 +545,7 @@ describe("stdio proxy session resets (one state machine)", () => {
     h.send({ jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: 2 } });
     hold.open();
     const warned = await h.request(3, "tools/call", { name: "list_spaces", arguments: {} });
+    await delivered(); // the warning counts once its write has completed
     const next = await h.request(4, "tools/call", { name: "list_spaces", arguments: {} });
 
     expect(h.received.some((m) => m.id === 2)).toBe(false);
@@ -593,6 +598,7 @@ describe("stdio proxy session resets (one state machine)", () => {
     await settle(50);
     hold.open();
     const [three, four] = [await h.answer(3), await h.answer(4)];
+    await delivered(); // the warning counts once its write has completed
     const next = await h.request(5, "tools/call", { name: "list_spaces", arguments: {} });
 
     expect(three.result.content[0].text).toBe(SESSION_EXPIRED);

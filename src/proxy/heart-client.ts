@@ -85,6 +85,9 @@ export class HeartClient {
   private renewal?: Promise<HeartFailure | undefined>;
   private initializing?: Promise<unknown>;
   private closing = false;
+  private closed?: Promise<void>;
+  /** Ends with the proxy: aborts a renewal's POSTs on a signal, which no single caller owns. */
+  private readonly lifetime = new AbortController();
   private renewals = 0;
   // Session resets, as two counters. `generation` counts the sessions Anytype
   // ended under the client; `delivered` is the newest generation the client has
@@ -162,13 +165,22 @@ export class HeartClient {
   /**
    * Ends a curated-tier session (Anytype caps sessions per key), after any
    * initialize still in flight has answered, so a session minted while the
-   * proxy shuts down is ended too.
+   * proxy shuts down is ended too. Every caller gets the same close: a second
+   * one (stdin ended, then a signal) waits for the DELETE the first started.
    */
-  async close(): Promise<void> {
+  close(): Promise<void> {
     this.closing = true;
-    await this.initializing?.catch(() => {});
-    await this.renewal?.catch(() => {});
-    await this.endSession();
+    this.closed ??= (async () => {
+      await this.initializing?.catch(() => {});
+      await this.renewal?.catch(() => {});
+      await this.endSession();
+    })();
+    return this.closed;
+  }
+
+  /** Stops a renewal in flight (a signal): its session, if minted, is then ended by close. */
+  shutdown(): void {
+    this.lifetime.abort();
   }
 
   /** Not cancellable (MCP forbids cancelling initialize): its answer may carry a session to end later. */
@@ -226,20 +238,38 @@ export class HeartClient {
     return undefined;
   }
 
+  /** Both POSTs of a renewal end with the proxy (`lifetime`), not with any one caller. */
   private async initializeAgain(): Promise<HeartFailure | undefined> {
     const id = `"anytype-mcp-renew-${++this.renewals}"`;
     const params = JSON.stringify(this.initializeParams ?? {});
-    const reply = await this.post(`{"jsonrpc":"2.0","id":${id},"method":"initialize","params":${params}}`);
+    const body = `{"jsonrpc":"2.0","id":${id},"method":"initialize","params":${params}}`;
+    const reply = await this.post(body, this.lifetime.signal, "initialize (renewal)");
+    if (reply.kind === "cancelled") return { kind: "closed" };
     if (reply.kind === "failed") return reply.failure;
     if (reply.kind === "rpcError") return { kind: "rejected", message: reply.message };
     const answer = reply.kind === "messages" ? reply.messages.find((m) => idOf(m) && sameId(idOf(m)!, id)) : undefined;
     if (answer && isObject(answer.parsed.error)) {
-      const said = boundedText(answer.parsed.error.message);
-      return { kind: "rejected", message: said ? this.redact(said) : "no details" };
+      return { kind: "rejected", message: quoted(answer.parsed.error.message, this.redact) ?? "no details" };
     }
     if (!answer || !this.sessionId) return { kind: "unreadable", status: 200, detail: "initialize opened no session" };
-    const acknowledged = await this.post('{"jsonrpc":"2.0","method":"notifications/initialized"}');
-    return acknowledged.kind === "failed" ? acknowledged.failure : undefined;
+    // Anytype acknowledges a notification with 202 and nothing else
+    const ack = await this.post(
+      '{"jsonrpc":"2.0","method":"notifications/initialized"}',
+      this.lifetime.signal,
+      "notifications/initialized (renewal)",
+    );
+    switch (ack.kind) {
+      case "accepted":
+        return undefined;
+      case "cancelled":
+        return { kind: "closed" };
+      case "failed":
+        return ack.failure;
+      case "rpcError":
+        return { kind: "rejected", message: ack.message };
+      default:
+        return { kind: "unreadable", status: 200, detail: "notifications/initialized was not acknowledged" };
+    }
   }
 
   private async endSession(): Promise<void> {
@@ -292,7 +322,13 @@ export class HeartClient {
       // session still exists on Anytype's side and must be ended
       const session = response.headers.get("mcp-session-id");
       if (session) this.sessionId = session;
-      text = await readBounded(response, response.ok ? MAX_REPLY_BYTES : MAX_ERROR_BYTES);
+      try {
+        text = await readBounded(response, response.ok ? MAX_REPLY_BYTES : MAX_ERROR_BYTES);
+      } catch (error) {
+        // a refusal's body is only a diagnostic: when it breaks, the status still stands
+        if (response.ok || signal?.aborted || deadline.timedOut()) throw error;
+        text = undefined;
+      }
     } catch (error) {
       if (signal?.aborted) return { kind: "cancelled" };
       if (deadline.timedOut()) return { kind: "failed", failure: { kind: "timeout", ms: this.timeoutMs } };
@@ -344,8 +380,7 @@ function envelopeError(json: unknown, redact: (text: string) => string): HeartRe
   if (!isObject(json) || json.jsonrpc !== "2.0" || !isObject(json.error)) return undefined;
   const { code, message } = json.error;
   if (typeof code !== "number" || !Number.isInteger(code) || code < -32768 || code > -32000) return undefined;
-  const said = boundedText(message);
-  return { kind: "rpcError", code, message: said ? redact(said) : "invalid request" };
+  return { kind: "rpcError", code, message: quoted(message, redact) ?? "invalid request" };
 }
 
 /**
@@ -467,11 +502,12 @@ export function parseEventStream(text: string): HeartMessage[] {
   return messages;
 }
 
-/** A diagnostic string from Anytype, bounded and on one line. */
-function boundedText(value: unknown): string | undefined {
+/** A diagnostic string from Anytype: on one line, credentials redacted, then bounded. */
+function quoted(value: unknown, redact: (text: string) => string): string | undefined {
   if (typeof value !== "string" || value === "") return undefined;
+  // redacted whole before it is cut: a credential straddling the cut would no longer match
   // eslint-disable-next-line no-control-regex
-  const text = value.replace(/[\u0000-\u001f\u007f]+/g, " ").trim();
+  const text = redact(value.replace(/[\u0000-\u001f\u007f]+/g, " ").trim());
   return text.length > 300 ? `${text.slice(0, 300)}…` : text;
 }
 

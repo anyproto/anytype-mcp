@@ -188,7 +188,9 @@ export class LocalFileTools {
         signal,
       });
       if (!response.ok) return toolError(await restError(response, this.redact));
-      const text = (await readBounded(response, 1 << 20)) ?? "";
+      // a receipt that breaks off is no receipt: the upload may have been stored, so it is
+      // reported unconfirmed (check before retrying) rather than as a failed transfer
+      const text = (await readBounded(response, 1 << 20).catch(() => undefined)) ?? "";
       const receipt = parseObject(text);
       // Anytype's receipt: 201 with the stored file's id, or 200 { dry_run: true } for a dry run.
       // Anything else (a login page from a proxy, a cut-off body) is not proof the upload happened.
@@ -334,7 +336,8 @@ export function fileName(
  * credentials are redacted from whatever is quoted.
  */
 async function restError(response: Response, redact: (text: string) => string): Promise<string> {
-  const body = parseObject((await readBounded(response, MAX_ERROR_BYTES)) ?? "");
+  // the body is a diagnostic: if it breaks off, the status alone is reported
+  const body = parseObject((await readBounded(response, MAX_ERROR_BYTES).catch(() => undefined)) ?? "");
   const error = anytypeError(body, response.status, redact);
   if (error) return JSON.stringify({ status: response.status, ...error });
   return `Anytype answered HTTP ${response.status}`;
