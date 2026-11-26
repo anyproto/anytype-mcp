@@ -19,7 +19,13 @@ import { anytypeError, redactor } from "./errors";
 import { isObject, oneLine, rawMember, sameId, type Inbound, type JsonObject } from "./jsonrpc";
 
 export type HeartFailure =
+  /** The connection never opened: nothing was sent. */
   | { kind: "unreachable"; code?: string }
+  /**
+   * The message was sent but its answer was lost, so a tool call may have run:
+   * status when Anytype's headers had arrived, ms when the deadline cut the reply.
+   */
+  | { kind: "lost"; status?: number; code?: string; ms?: number }
   | { kind: "timeout"; ms: number }
   /** message: Anytype's own error message, when the body was Anytype's error JSON. */
   | { kind: "http"; status: number; message?: string; routeMissing: boolean }
@@ -69,6 +75,16 @@ const CLOSE_TIMEOUT_MS = 2_000;
 const MAX_REPLY_BYTES = 128 << 20;
 /** An error response is read only this far: it is a diagnostic, not content. */
 const MAX_ERROR_BYTES = 64 << 10;
+/** Failures to open a connection: nothing was sent. Any other lost connection may have delivered the request. */
+export const NEVER_CONNECTED = new Set([
+  "ECONNREFUSED",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "EADDRNOTAVAIL",
+  "UND_ERR_CONNECT_TIMEOUT",
+]);
 
 export class HeartClient {
   readonly endpoint: string;
@@ -86,7 +102,7 @@ export class HeartClient {
   private initializing?: Promise<unknown>;
   private closing = false;
   private closed?: Promise<void>;
-  /** Ends with the proxy: aborts a renewal's POSTs on a signal, which no single caller owns. */
+  /** Ends with the proxy: aborts initialize and renewal POSTs on a signal; no single caller owns those. */
   private readonly lifetime = new AbortController();
   private renewals = 0;
   // Session resets, as two counters. `generation` counts the sessions Anytype
@@ -178,12 +194,15 @@ export class HeartClient {
     return this.closed;
   }
 
-  /** Stops a renewal in flight (a signal): its session, if minted, is then ended by close. */
+  /** Stops an initialize or renewal in flight (a signal): a session whose id arrived is then ended. */
   shutdown(): void {
     this.lifetime.abort();
   }
 
-  /** Not cancellable (MCP forbids cancelling initialize): its answer may carry a session to end later. */
+  /**
+   * Not cancellable by the client (MCP forbids cancelling initialize), only by
+   * a signal ending the proxy; its answer may carry a session to end later.
+   */
   private async initialize(message: Inbound): Promise<HeartReply> {
     const run = async (): Promise<HeartReply> => {
       // a new initialize starts over; the session it replaces is ended, not leaked
@@ -191,7 +210,7 @@ export class HeartClient {
       this.needsSession = false;
       this.initializeParams = message.params;
       this.protocolVersion = undefined;
-      const reply = await this.post(message.raw, undefined, "initialize");
+      const reply = await this.post(message.raw, this.lifetime.signal, "initialize");
       if (reply.kind === "messages") this.protocolVersion = answeredVersion(reply.messages, message.id!);
       if (initializeSucceeded(reply, message.id!)) {
         // the client started afresh: it holds no numbers from an earlier session
@@ -245,7 +264,7 @@ export class HeartClient {
     const body = `{"jsonrpc":"2.0","id":${id},"method":"initialize","params":${params}}`;
     const reply = await this.post(body, this.lifetime.signal, "initialize (renewal)");
     if (reply.kind === "cancelled") return { kind: "closed" };
-    if (reply.kind === "failed") return reply.failure;
+    if (reply.kind === "failed") return renewalFailure(reply.failure);
     if (reply.kind === "rpcError") return { kind: "rejected", message: reply.message };
     const answer = reply.kind === "messages" ? reply.messages.find((m) => idOf(m) && sameId(idOf(m)!, id)) : undefined;
     if (answer && isObject(answer.parsed.error)) {
@@ -264,7 +283,7 @@ export class HeartClient {
       case "cancelled":
         return { kind: "closed" };
       case "failed":
-        return ack.failure;
+        return renewalFailure(ack.failure);
       case "rpcError":
         return { kind: "rejected", message: ack.message };
       default:
@@ -304,40 +323,51 @@ export class HeartClient {
   private async post(body: string, signal?: AbortSignal, method = "renewal"): Promise<HeartReply> {
     const started = Date.now();
     const deadline = withDeadline(signal, this.timeoutMs);
-    let response: Response;
-    let text: string | undefined;
     try {
-      response = await this.fetchImpl(this.endpoint, {
-        method: "POST",
-        headers: this.requestHeaders({
-          "Content-Type": "application/json",
-          Accept: "application/json, text/event-stream",
-        }),
-        body,
-        // a redirect would resend the message (tool arguments included) elsewhere
-        redirect: "manual",
-        signal: deadline.signal,
-      });
+      let response: Response;
+      try {
+        response = await this.fetchImpl(this.endpoint, {
+          method: "POST",
+          headers: this.requestHeaders({
+            "Content-Type": "application/json",
+            Accept: "application/json, text/event-stream",
+          }),
+          body,
+          // a redirect would resend the message (tool arguments included) elsewhere
+          redirect: "manual",
+          signal: deadline.signal,
+        });
+      } catch (error) {
+        if (signal?.aborted) return { kind: "cancelled" };
+        if (deadline.timedOut()) return { kind: "failed", failure: { kind: "timeout", ms: this.timeoutMs } };
+        const code = networkCode(error);
+        // only a connection that never opened is known to have sent nothing
+        if (NEVER_CONNECTED.has(code ?? "")) return { kind: "failed", failure: { kind: "unreachable", code } };
+        return { kind: "failed", failure: { kind: "lost", code } };
+      }
       // recorded as soon as the headers arrive: if the body then breaks, the
       // session still exists on Anytype's side and must be ended
       const session = response.headers.get("mcp-session-id");
       if (session) this.sessionId = session;
+      debug("mcp", { method, status: response.status, durationMs: Date.now() - started });
+      let text: string | undefined;
       try {
         text = await readBounded(response, response.ok ? MAX_REPLY_BYTES : MAX_ERROR_BYTES);
-      } catch (error) {
-        // a refusal's body is only a diagnostic: when it breaks, the status still stands
-        if (response.ok || signal?.aborted || deadline.timedOut()) throw error;
+      } catch {
+        if (signal?.aborted) return { kind: "cancelled" };
+        // Anytype answered, so the message reached it: a 2xx reply lost on the way
+        // leaves the outcome unknown, while a refusal's body is only a diagnostic
+        // and its status still stands
+        if (response.ok) {
+          const ms = deadline.timedOut() ? this.timeoutMs : undefined;
+          return { kind: "failed", failure: { kind: "lost", status: response.status, ms } };
+        }
         text = undefined;
       }
-    } catch (error) {
-      if (signal?.aborted) return { kind: "cancelled" };
-      if (deadline.timedOut()) return { kind: "failed", failure: { kind: "timeout", ms: this.timeoutMs } };
-      return { kind: "failed", failure: { kind: "unreachable", code: networkCode(error) } };
+      return this.interpret(response, text);
     } finally {
       deadline.dispose();
     }
-    debug("mcp", { method, status: response.status, durationMs: Date.now() - started });
-    return this.interpret(response, text);
   }
 
   private interpret(response: Response, body: string | undefined): HeartReply {
@@ -366,8 +396,9 @@ export class HeartClient {
     const type = (response.headers.get("content-type") ?? "").toLowerCase();
     const messages = type.includes("text/event-stream") ? parseEventStream(body) : parseJsonMessages(body);
     if (messages.length > 0) return { kind: "messages", messages };
-    if (body.trim() === "") return { kind: "accepted" };
-    return { kind: "failed", failure: { kind: "unreadable", status, detail: `content-type ${type || "none"}` } };
+    // only a 202 acknowledges (above): an empty 200 or 204 answers nothing
+    const detail = body.trim() === "" ? "an empty body" : `content-type ${type || "none"}`;
+    return { kind: "failed", failure: { kind: "unreadable", status, detail } };
   }
 }
 
@@ -398,6 +429,18 @@ export function describeFailure(failure: HeartFailure, client: { baseUrl: string
         `Cannot reach Anytype at ${client.baseUrl}${failure.code ? ` (${failure.code})` : ""}. Ask the user to start ` +
         "the Anytype app, or to set ANYTYPE_API_BASE_URL if it listens elsewhere; changing the call will not help."
       );
+    case "lost": {
+      const what =
+        failure.status === undefined
+          ? "The connection to Anytype closed after the request was sent, before Anytype answered" +
+            (failure.code ? ` (${failure.code})` : "")
+          : `Anytype answered HTTP ${failure.status}, but its reply ` +
+            (failure.ms ? `did not finish within ${Math.round(failure.ms / 1000)} s` : "broke off before it was read");
+      return (
+        `${what}. The outcome is unconfirmed: if this was a tool call, it may have been applied. Check whether ` +
+        "it landed (for example, read or list what it changes) before repeating it."
+      );
+    }
     case "timeout":
       return `Anytype at ${client.baseUrl} did not answer within ${Math.round(failure.ms / 1000)} s. Ask the user whether the Anytype app is responding.`;
     case "redirect":
@@ -447,6 +490,16 @@ export function initializeSucceeded(reply: HeartReply, id: string): boolean {
       return answers !== undefined && sameId(answers, id) && isObject(m.parsed.result);
     })
   );
+}
+
+/**
+ * A renewal's own answer lost is no unconfirmed write: the caller's message
+ * was not sent yet (its call did not run), so it is reported as a plain failure.
+ */
+function renewalFailure(failure: HeartFailure): HeartFailure {
+  if (failure.kind !== "lost") return failure;
+  if (failure.status === undefined) return { kind: "unreachable", code: failure.code };
+  return { kind: "unreadable", status: failure.status, detail: "the reply was cut off" };
 }
 
 function sessionGone(reply: HeartReply): boolean {

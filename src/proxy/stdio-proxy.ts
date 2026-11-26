@@ -212,7 +212,27 @@ export class StdioProxy {
     const reply = await this.heart.send(request, signal, seenDelivered);
     // a cancelled request is not answered (MCP cancellation)
     if (signal.aborted) return;
+    if (reply.kind === "sessionExpired") return this.warnOfReset(request, reply.generation, signal);
     this.relay(request, reply, request.method === "tools/list" ? (result) => this.withLocalTools(result) : undefined);
+  }
+
+  /**
+   * Writes SESSION_EXPIRED. The request stays registered, so still cancellable,
+   * until the write has left the process; the client counts as told only if
+   * the write succeeded before any cancellation (the host discards a cancelled
+   * request's answer unread). Until then tool calls keep being refused. A
+   * cancellation or a signal ends the wait at once, unacknowledged.
+   */
+  private async warnOfReset(request: Inbound, generation: number, signal: AbortSignal): Promise<void> {
+    const told = await new Promise<boolean>((resolve) => {
+      signal.addEventListener("abort", () => resolve(false), { once: true });
+      this.fail(request, SESSION_EXPIRED, (error) => {
+        // stdout failed: nothing can reach the host any more
+        if (error) this.stop();
+        resolve(!error);
+      });
+    });
+    if (told) this.heart.acknowledgeReset(generation);
   }
 
   private localCall(request: Inbound): ((signal: AbortSignal) => Promise<JsonObject>) | undefined {
@@ -249,12 +269,8 @@ export class StdioProxy {
         this.fail(request, "Anytype accepted the request without answering it");
         return;
       case "sessionExpired":
-        // relay runs only for a live (not cancelled) request: the warning is written now, so the client knows
-        // delivered only once the warning has left the process; until then calls keep being refused
-        this.fail(request, SESSION_EXPIRED, (error) => {
-          if (error) this.stop();
-          else this.heart.acknowledgeReset(reply.generation);
-        });
+        // only a tool call gets this, and request() writes it itself (warnOfReset); a fallback, never acknowledged
+        this.fail(request, SESSION_EXPIRED);
         return;
       case "rpcError":
         this.write(frameError(request.id!, reply.code, reply.message));

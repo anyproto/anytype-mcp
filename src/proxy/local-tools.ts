@@ -10,7 +10,7 @@ import { basename } from "node:path";
 import type { ReadableStream as WebReadableStream } from "node:stream/web";
 import { anytypeError, redactor } from "./errors";
 import { FilesRoot, multipartFile, RootError } from "./files";
-import { networkCode, readBounded, withDeadline } from "./heart-client";
+import { networkCode, NEVER_CONNECTED, readBounded, withDeadline } from "./heart-client";
 import { isObject, toolError, type JsonObject } from "./jsonrpc";
 
 /** A whole transfer, body included, ends by then. */
@@ -59,17 +59,6 @@ class NoResponseError extends TransferError {
     super(message);
   }
 }
-
-/** Failures that mean the connection never opened, so nothing was sent. */
-const NEVER_CONNECTED = new Set([
-  "ECONNREFUSED",
-  "ENOTFOUND",
-  "EAI_AGAIN",
-  "EHOSTUNREACH",
-  "ENETUNREACH",
-  "EADDRNOTAVAIL",
-  "UND_ERR_CONNECT_TIMEOUT",
-]);
 
 export class LocalFileTools {
   private readonly baseUrl: string;

@@ -580,7 +580,8 @@ describe("HeartClient and an initialize cut off mid-body", () => {
 
     const reply = await client.send(initialize());
 
-    expect(reply).toMatchObject({ kind: "failed", failure: { kind: "unreachable" } });
+    // Anytype answered: its reply was lost, not unreachable
+    expect(reply).toMatchObject({ kind: "failed", failure: { kind: "lost", status: 200 } });
     expect(heart!.requests.at(-1)).toMatchObject({ method: "DELETE", headers: { "mcp-session-id": "half-open" } });
     expect(heart!.sessions.size).toBe(0);
     expect(client.session).toBeUndefined();

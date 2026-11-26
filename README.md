@@ -170,6 +170,7 @@ Keep the directory to yourself. The checks resolve the path, then open the file,
 Version 3 forwards to Anytype's built-in MCP server instead of generating tools from its OpenAPI document. It needs Node.js 18 or later. The configuration stays the same, but the tools change:
 
 - Tool names lose the `API-` prefix and use underscores: `API-list-spaces` is now `list_spaces`, and `API-create-object` is now `create_object`. Update saved prompts, scripts and host permission rules that name tools. In Claude Code, `mcp__anytype__API-list-spaces` becomes `mcp__anytype__list_spaces`.
+  - This mechanical rename only holds for operations that still exist in the v2 API. If you used the v1 spec in 2.x, `API-update-object` becomes `patch_object`, which takes an `ops` array, not `update_object`. Update saved calls and permission or allowlist rules to match.
 - `create_object`, `create_type` and `update_type` take their fields as top-level arguments. There is no `body` wrapper any more:
 
   ```jsonc
