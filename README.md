@@ -9,6 +9,8 @@ The Anytype MCP Server is a [Model Context Protocol (MCP)](https://modelcontextp
 
 Anytype serves MCP itself, from its local API at `http://127.0.0.1:31009/mcp/full`. This package connects MCP clients that can only launch a local command (Claude Desktop, for example) to that server: it forwards each message from stdio to Anytype and passes the answer back. The tools come from the Anytype app you run, so they follow its version.
 
+It needs Anytype with heart 0.51.6 or later, the first version with the built-in MCP server. For an older Anytype, pin version 2: `npx -y @anyproto/anytype-mcp@2.0.3`.
+
 ## Features
 
 - Global & Space Search
@@ -148,11 +150,26 @@ Anytype serves three tool sets. `full` (the default) has one tool per API operat
 }
 ```
 
-On `full`, two more tools work with files on the computer running MCP: `upload_local_file` uploads a file by its path, and `download_file` saves a file to a private temporary directory and returns its path.
+See [Tool behavior](docs/tool-behavior.md) for errors, sessions, and troubleshooting.
 
-Anytype versions without the built-in MCP server get the tools this package used to generate from Anytype's OpenAPI document instead. Update Anytype to use the built-in server.
+### Local files
 
-See [Tool behavior](docs/tool-behavior.md) for errors, sessions, the generated-tools mode, and troubleshooting.
+On `full`, two more tools move files between Anytype and the computer running MCP. They use one directory only: `~/.anytype-mcp/files`, created on first use and readable by your user only. Set `ANYTYPE_MCP_FILES_DIR` to an absolute path to use another directory.
+
+- `upload_local_file` uploads a file from that directory. Its `path` is relative to the directory, for example `report.pdf`. Paths outside it are refused, including absolute paths, `..`, and symbolic links that lead out. To upload a file, put it in the directory first.
+- `download_file` saves a file into that directory under a new name, such as `report.pdf` or `report (2).pdf`, and returns the path. It never overwrites an existing file.
+
+`upload_file` uploads from a web URL and needs no local directory.
+
+## Upgrading from 2.x
+
+Version 3 forwards to Anytype's built-in MCP server instead of generating tools from its OpenAPI document. The configuration stays the same, but the tools change:
+
+- Tool names lose the `API-` prefix and use underscores: `API-list-spaces` is now `list_spaces`, and `API-create-object` is now `create_object`. Update saved prompts, scripts and host permission rules that name tools. In Claude Code, `mcp__anytype__API-list-spaces` becomes `mcp__anytype__list_spaces`.
+- `expected_etag` is now `if_match`.
+- `request_key` is gone. Anytype adds an idempotency key to every write itself. Only `toggle_chat_reaction` takes one, as `idempotency_key`, so a retried toggle does not undo itself.
+- `API-auth-whoami` and `API-publish-chat-status` are no longer offered.
+- `run <openapi-spec>` is gone. To keep the 2.x behavior, for example with an Anytype older than heart 0.51.6, pin version 2: `"args": ["-y", "@anyproto/anytype-mcp@2.0.3"]`.
 
 ## Development
 

@@ -8,19 +8,12 @@ RUN bun install --frozen-lockfile
 COPY . .
 RUN bun run build
 
-FROM oven/bun:1-alpine AS deps
-WORKDIR /app
-
-COPY package.json bun.lock ./
-RUN bun install --frozen-lockfile --production
-
+# bin/cli.mjs is a self-contained bundle: the package has no runtime dependencies
 FROM node:24-alpine AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 
 COPY package.json ./
-COPY --from=deps /app/node_modules ./node_modules
 COPY --from=build /app/bin ./bin
-COPY --from=build /app/build ./build
 
 ENTRYPOINT ["node", "/app/bin/cli.mjs"]

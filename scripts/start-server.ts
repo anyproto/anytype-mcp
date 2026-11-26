@@ -1,14 +1,9 @@
 // The bin entry (bundled to bin/cli.mjs). The commands live in src/cli.ts, which
-// has no side effects on import.
+// has no side effects on import, and serves configuration errors itself; what
+// reaches here is get-key's or an unexpected failure.
 import { main } from "../src/cli";
-import { ValidationError } from "../src/legacy/init-server";
 
 main().catch((error) => {
-  if (error instanceof ValidationError) {
-    console.error("Invalid OpenAPI 3.1 specification:");
-    error.errors.forEach((err) => console.error(err));
-  } else {
-    console.error("Error:", error.message);
-  }
+  console.error("Error:", error instanceof Error ? error.message : error);
   process.exit(1);
 });

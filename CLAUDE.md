@@ -14,7 +14,7 @@ This project uses [Bun](https://bun.com) as its package manager and script runne
 ### Testing
 - `bun run test` - Run all tests once with Vitest
 - `bun run test:dev` - Run tests in watch mode
-- Run a specific test file: `bunx vitest run src/openapi/__tests__/parser.test.ts`
+- Run a specific test file: `bunx vitest run src/proxy/__tests__/stdio-proxy.test.ts`
 
 ### Code Quality
 - `bun run lint` - Check code formatting with ESLint
@@ -22,55 +22,51 @@ This project uses [Bun](https://bun.com) as its package manager and script runne
 - `bun run format` - Auto-fix formatting issues with Prettier
 - `bun run typecheck` - Run TypeScript type checking without emitting files
 
-### Utility Scripts
-- `bun run parse-openapi` - Parse OpenAPI specification
-
 ## Architecture Overview
 
-This is an MCP (Model Context Protocol) server that bridges Anytype's API with AI assistants. The architecture follows a proxy pattern where OpenAPI specifications are dynamically converted to MCP tools.
+Anytype serves MCP itself, from its local API server at `POST /mcp/{small|large|full}` (anytype-heart `core/api/server/mcp.go`, heart >= 0.51.6). This package is a thin stdio front end for it: hosts that can only launch a command (Claude Desktop) talk newline-delimited JSON-RPC to it, and it forwards each message to `/mcp/<tier>` byte for byte and writes Anytype's answer back byte for byte. It generates no tools; the tool table, descriptions, results and repair hints are Anytype's. There are no runtime dependencies: `bin/cli.mjs` is a self-contained esbuild bundle.
 
 ### Core Components
 
-**MCP Proxy Layer (`src/mcp/proxy.ts`)**
-- Central orchestrator that implements the MCP server protocol
-- Converts OpenAPI operations to MCP tools dynamically at runtime
-- Handles tool listing and execution through the MCP protocol
-- Maintains a lookup table mapping MCP tool names to OpenAPI operations
+**CLI (`src/cli.ts`, entry `scripts/start-server.ts`)**
+- `anytype-mcp [run] [--tier small|large|full]` serves stdio; `anytype-mcp get-key` pairs and prints a key (`src/auth/get-key.ts`)
+- Configuration errors are served as answers to every request (the host shows them) instead of exiting
 
-**OpenAPI Parser (`src/openapi/parser.ts`)**
-- Converts OpenAPI schemas to JSON Schema format for MCP compatibility
-- Handles $ref resolution with cycle detection
-- Supports multipart/form-data for file uploads
-- Generates MCP tool definitions from OpenAPI paths and operations
+**Configuration (`src/proxy/config.ts`)**
+- `OPENAPI_MCP_HEADERS` (JSON headers; `Authorization: Bearer <key>` is what matters), `ANYTYPE_API_BASE_URL`, `ANYTYPE_MCP_TIER`, `ANYTYPE_MCP_FILES_DIR`
+- Every header is validated before any request and reported by name only: values hold the API key and must never reach an error message, stdout or stderr
 
-**HTTP Client (`src/client/http-client.ts`)**
-- Built on openapi-client-axios for OpenAPI-aware HTTP requests
-- Handles authentication headers from environment variables
-- Supports file uploads via FormData
-- Executes OpenAPI operations with proper parameter mapping
+**JSON-RPC routing (`src/proxy/jsonrpc.ts`)**
+- `classify` mirrors heart's `wrapper.ClassifyMessage`, so nothing the proxy does itself runs on an envelope heart would refuse
+- Request ids are kept as their raw JSON text (`rawMember`, `frameResult`), never re-encoded through a JS number
 
-**Server Initialization (`src/init-server.ts`)**
-- Loads OpenAPI spec from URL (default: local Anytype API) or file
-- Initializes the MCP proxy with the spec
-- Connects to stdio transport for communication
+**HTTP side (`src/proxy/heart-client.ts`)**
+- One POST per message; 202 for notifications; HTTP-level failures (401/403/404/429, unreachable, redirect) are classified and rendered by `describeFailure`
+- Curated tiers: `Mcp-Session-Id` from initialize, sent on every message, renewed once (shared by concurrent calls) after heart expires it; a `tools/call` that met the expired session is NOT replayed (its handles may name other objects) but answered with `SESSION_EXPIRED`; `close()` waits for a pending initialize and DELETEs the session
+- Redirects are never followed; error bodies are read bounded and only heart's own `message` is quoted
+
+**stdio side (`src/proxy/stdio-proxy.ts`)**
+- `readLines` frames stdin with heart's 8 MiB limit; `StdioProxy.receive` registers each request synchronously so a `notifications/cancelled` in the same read can stop it
+- Negotiates its own protocol revision (`chooseVersion`; 2025-03-26 is not offered because it requires batches)
+- On the full tier, appends the local file tools to `tools/list` and dispatches calls to them
+
+**Local file tools (`src/proxy/local-tools.ts`, `src/proxy/files.ts`)**
+- `upload_local_file` and `download_file`, against heart's v2 REST file routes with the caller's key, confined to one root directory (default `~/.anytype-mcp/files`): relative paths only, realpath containment, create-exclusive downloads, whole-file (HTTP 200) only, streaming multipart upload
+- They step aside if heart lists a tool with the same name
 
 ### Key Design Patterns
 
-1. **Dynamic Tool Generation**: Tools are not hardcoded but generated from the OpenAPI spec at runtime, making the server adaptable to API changes.
-
-2. **Header Injection**: Authentication and version headers are parsed from `OPENAPI_MCP_HEADERS` environment variable and injected into all requests.
-
-3. **Operation Mapping**: Each OpenAPI operation becomes an MCP tool with a naming convention: `{tag}-{operationId}`.
-
-4. **Schema Caching**: The parser maintains a cache of resolved schemas to handle circular references and improve performance.
+1. **Pass-through, not translation**: the proxy parses only to route. Anything it must change (initialize's revision, the tools/list append, its own errors) is re-framed under the request's raw id.
+2. **Fail loudly at the boundary**: errors only a process boundary can know (Anytype down, key rejected, no `/mcp`) become in-band tool errors on `tools/call` and JSON-RPC errors elsewhere, with "ask the user" guidance.
+3. **Secrets stay out of diagnostics**: header values are validated up front; network errors are reported by system code only.
 
 ## Testing Strategy
 
-Tests use Vitest and are colocated with source files in `__tests__` directories. Key test areas:
-- OpenAPI to MCP conversion logic
-- HTTP client behavior including file uploads
-- MCP proxy tool execution
-- Multipart form data handling
+Tests use Vitest and are colocated with source files in `__tests__` directories. `src/proxy/__tests__/fake-heart.ts` is a fake API server written from heart's `/mcp` contract (auth, tiers, sessions, 202, plain-404 for an Anytype without `/mcp`, the v2 file routes, an `intercept` hook for 429s, delays and redirects). Key test areas:
+- the HTTP contract and session renewal (`heart-client.test.ts`)
+- stdio framing, cancellation, envelope validation, revisions, shutdown (`stdio-proxy.test.ts`)
+- the MCP SDK client end to end through the proxy (`sdk-client.test.ts`)
+- the files root (`local-tools.test.ts`) and configuration (`config.test.ts`)
 
 ## Code Style
 

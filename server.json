@@ -38,6 +38,13 @@
           "format": "string",
           "is_secret": false,
           "name": "ANYTYPE_API_BASE_URL"
+        },
+        {
+          "description": "The only directory upload_local_file reads from and download_file writes to (absolute path). Default: ~/.anytype-mcp/files",
+          "is_required": false,
+          "format": "string",
+          "is_secret": false,
+          "name": "ANYTYPE_MCP_FILES_DIR"
         }
       ]
     }

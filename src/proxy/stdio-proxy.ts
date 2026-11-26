@@ -1,168 +1,186 @@
 // The stdio half of the proxy. Hosts whose configuration only launches
 // commands (Claude Desktop among them) attach here; each newline-delimited
-// JSON-RPC message from stdin goes to Anytype's /mcp/{tier} as it is, and what
-// Anytype answers comes back on stdout as it is. The proxy adds only what a
-// process boundary needs:
+// JSON-RPC message from stdin goes to Anytype's /mcp/{tier} byte for byte, and
+// what Anytype answers comes back on stdout byte for byte. The proxy adds only
+// what a process boundary needs:
 //
+// - a message Anytype would refuse as malformed is refused here first, so
+//   nothing below runs on it;
 // - errors Anytype cannot send (unreachable, key rejected) become a JSON-RPC
 //   error, or an in-band tool error on tools/call so the model can tell the user;
-// - the stdio connection negotiates its own protocol revision: Anytype's HTTP
-//   server speaks 2025-06-18 and 2025-11-25, a stdio client may ask for an older
-//   one, and the tools surface is the same in each (Anytype's own stdio server
-//   echoes those older revisions too);
-// - notifications/cancelled aborts the forwarded call instead of being sent on;
-// - on the full tier, two local file tools (local-tools.ts);
-// - optionally, a fallback for an Anytype that predates /mcp.
+// - the stdio connection negotiates its own protocol revision;
+// - notifications/cancelled stops the call it names, even one not yet sent;
+// - on the full tier, two local file tools (local-tools.ts).
 
-import { createInterface } from "node:readline";
 import type { Readable, Writable } from "node:stream";
-import type { Tier } from "./config";
-import { describeFailure, HeartClient, type HeartReply } from "./heart-client";
+import { DEFAULT_BASE_URL, type Tier } from "./config";
+import { describeFailure, HeartClient, idOf, type HeartReply } from "./heart-client";
 import {
-  errorResponse,
+  classify,
+  frameError,
+  frameResult,
+  idKey,
   INTERNAL_ERROR,
-  isNotification,
+  INVALID_REQUEST,
   isObject,
-  isRequest,
-  PARSE_ERROR,
-  resultResponse,
+  MAX_MESSAGE_BYTES,
+  rawMember,
+  sameId,
   toolError,
+  type Inbound,
   type JsonObject,
-  type Request,
-  type RequestId,
 } from "./jsonrpc";
 import { LocalFileTools } from "./local-tools";
 
 /**
- * Revisions the stdio side may answer with. Each published revision up to
- * the newest Anytype speaks: for a tools-only server they differ in optional
- * fields (annotations, structuredContent) an older client ignores.
+ * Revisions the stdio side answers with. Anytype's HTTP server speaks
+ * 2025-06-18 and 2025-11-25; for a tools-only server the older ones differ in
+ * optional fields an older client ignores (Anytype's own stdio server echoes
+ * them too). 2025-03-26 is left out: it requires accepting JSON-RPC batches,
+ * which Anytype refuses, so its clients are answered with 2024-11-05.
  */
-export const STDIO_PROTOCOL_VERSIONS = ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"];
+export const STDIO_PROTOCOL_VERSIONS = ["2024-11-05", "2025-06-18", "2025-11-25"];
 
-/**
- * Starts serving messages from another server once Anytype turned out not to
- * have /mcp: deliver carries that server's messages to stdout; the function
- * returned sends a client message to it.
- */
-export type LegacyFallback = (deliver: (message: unknown) => void) => Promise<(message: unknown) => Promise<void>>;
+/** The client's revision when the proxy carries it, else the newest one not newer than it, else Anytype's. */
+export function chooseVersion(asked: unknown, answered: string): string {
+  if (typeof asked !== "string") return answered;
+  if (STDIO_PROTOCOL_VERSIONS.includes(asked)) return asked;
+  // revisions are dates, so string order is age order
+  const older = STDIO_PROTOCOL_VERSIONS.filter((version) => version < asked);
+  return older.at(-1) ?? answered;
+}
+
+export const SESSION_EXPIRED =
+  "The Anytype session expired (Anytype ends a session idle for 30 minutes) and a new one was opened, so " +
+  "numbered results and handles from before no longer exist. This call was not run. Re-read your targets " +
+  "(run spaces or find again) and retry with the new numbers.";
 
 export interface StdioProxyOptions {
   heart: HeartClient;
-  tier: Tier;
   /** Served beside Anytype's tools; the full tier only. */
   localTools?: LocalFileTools;
-  legacyFallback?: LegacyFallback;
+  /** A configuration the proxy cannot run with: every request is answered with it. */
+  configError?: string;
   log?: (line: string) => void;
+}
+
+interface Pending {
+  controller: AbortController;
+  done: Promise<void>;
 }
 
 export class StdioProxy {
   private readonly heart: HeartClient;
-  private readonly inflight = new Map<RequestId, AbortController>();
+  private readonly pending = new Map<string, Pending>();
   private readonly log: (line: string) => void;
   /** Settles once the latest initialize has been answered; everything else waits for it. */
   private ready: Promise<void> = Promise.resolve();
-  private legacy?: (message: unknown) => Promise<void>;
+  private readonly work = new Set<Promise<void>>();
 
   constructor(
     private readonly options: StdioProxyOptions,
-    private readonly write: (message: unknown) => void,
+    private readonly write: (line: string) => void,
   ) {
     this.heart = options.heart;
     this.log = options.log ?? (() => {});
   }
 
-  /** One line from the client. */
-  async receive(line: string): Promise<void> {
-    let message: unknown;
-    try {
-      message = JSON.parse(line);
-    } catch {
-      this.write(errorResponse(null, PARSE_ERROR, "parse JSON-RPC message: not valid JSON"));
-      return;
+  /**
+   * One line from the client. Everything up to the first await runs now, in
+   * arrival order: a request is registered before a cancellation behind it in
+   * the same read can look for it.
+   */
+  receive(line: string): Promise<void> {
+    const message = classify(line);
+    if (message.kind === "invalid") {
+      this.write(frameError(message.id, message.code, message.message));
+      return Promise.resolve();
     }
-    if (isRequest(message) && message.method === "initialize") {
+    if (this.options.configError) {
+      if (message.kind === "request") this.fail(message, this.options.configError);
+      return Promise.resolve();
+    }
+    if (message.kind === "notification" && message.method === "notifications/cancelled") {
+      // the proxy acts on it; Anytype answers one POST per call and has nothing to cancel
+      const params = rawMember(message.raw, "params");
+      const id = params ? rawMember(params, "requestId") : undefined;
+      if (id && /^(?:"|-?\d)/.test(id)) this.pending.get(idKey(id))?.controller.abort();
+      return Promise.resolve();
+    }
+    if (message.kind === "request" && message.method === "initialize") {
       const answered = this.ready.then(() => this.initialize(message));
       this.ready = answered.catch(() => {});
-      return answered;
+      return this.track(answered);
     }
-    if (isNotification(message) && message.method === "notifications/cancelled") {
-      this.cancel(isObject(message.params) ? message.params.requestId : undefined);
-      if (!this.legacy) return;
+    if (message.kind === "request") {
+      const key = idKey(message.id!);
+      const controller = new AbortController();
+      const done = this.ready
+        .then(() => (controller.signal.aborted ? undefined : this.request(message, controller.signal)))
+        .finally(() => {
+          if (this.pending.get(key)?.controller === controller) this.pending.delete(key);
+        });
+      this.pending.set(key, { controller, done });
+      return this.track(done);
     }
-    await this.ready;
-    if (this.legacy) return this.legacy(message);
-    if (isRequest(message)) return this.request(message);
-    return this.forward(message);
+    return this.track(this.ready.then(() => this.forward(message)));
   }
 
-  private async initialize(request: Request): Promise<void> {
-    if (this.legacy) return this.legacy(request);
+  /** Refuses a line past Anytype's size bound without having held it in memory. */
+  oversized(): void {
+    this.write(
+      frameError(
+        "null",
+        INVALID_REQUEST,
+        `message larger than ${MAX_MESSAGE_BYTES >> 20} MiB, the most Anytype accepts`,
+      ),
+    );
+  }
+
+  /**
+   * Shuts down: by default every call already received is answered first
+   * (stdin closing is how a host ends the session); with abort, calls in
+   * flight are cancelled (a signal). Either way a download in progress
+   * removes its partial file and the session is ended.
+   */
+  async close({ abort = false } = {}): Promise<void> {
+    if (abort) this.pending.forEach((p) => p.controller.abort());
+    await Promise.allSettled([...this.work]);
+    await this.heart.close();
+  }
+
+  private track(promise: Promise<void>): Promise<void> {
+    this.work.add(promise);
+    void promise.finally(() => this.work.delete(promise)).catch(() => {});
+    return promise;
+  }
+
+  private async initialize(request: Inbound): Promise<void> {
     const reply = await this.heart.send(request);
-    if (
-      this.options.legacyFallback &&
-      reply.kind === "failed" &&
-      reply.failure.kind === "http" &&
-      reply.failure.routeMissing
-    ) {
-      this.log(
-        `${this.heart.endpoint} is not served (HTTP 404): this Anytype predates its built-in MCP server. ` +
-          "Falling back to tools generated from its OpenAPI document; update Anytype to use the built-in server.",
-      );
-      try {
-        this.legacy = await this.options.legacyFallback((message) => this.write(message));
-      } catch (error) {
-        this.fail(request, `Anytype has no built-in MCP server and the fallback failed to start: ${errorText(error)}`);
-        return;
-      }
-      return this.legacy(request);
-    }
-    if (reply.kind === "messages") {
-      reply.messages = reply.messages.map((message) => this.answerVersion(request, message));
-    }
-    this.relay(request, reply);
+    this.relay(request, reply, (result) => {
+      if (typeof result.protocolVersion !== "string") return undefined;
+      const version = chooseVersion(request.params?.protocolVersion, result.protocolVersion);
+      return version === result.protocolVersion ? undefined : { ...result, protocolVersion: version };
+    });
   }
 
-  /** Answers the client's own revision when Anytype chose another and the client's is one the proxy can carry. */
-  private answerVersion(request: Request, message: JsonObject): JsonObject {
-    const asked = isObject(request.params) ? request.params.protocolVersion : undefined;
-    if (
-      message.id !== request.id ||
-      !isObject(message.result) ||
-      typeof asked !== "string" ||
-      message.result.protocolVersion === asked ||
-      !STDIO_PROTOCOL_VERSIONS.includes(asked)
-    ) {
-      return message;
+  private async request(request: Inbound, signal: AbortSignal): Promise<void> {
+    const local = this.localCall(request);
+    if (local) {
+      const result = await local(signal).catch(() => toolError("the local file tool failed"));
+      if (!signal.aborted) this.write(frameResult(request.id!, result));
+      return;
     }
-    return { ...message, result: { ...message.result, protocolVersion: asked } };
+    const reply = await this.heart.send(request, signal);
+    // a cancelled request is not answered (MCP cancellation)
+    if (signal.aborted) return;
+    this.relay(request, reply, request.method === "tools/list" ? (result) => this.withLocalTools(result) : undefined);
   }
 
-  private async request(request: Request): Promise<void> {
-    const controller = new AbortController();
-    this.inflight.set(request.id, controller);
-    try {
-      const local = this.localCall(request);
-      if (local) {
-        const result = await local(controller.signal).catch((error) => toolError(errorText(error)));
-        if (!controller.signal.aborted) this.write(resultResponse(request.id, result));
-        return;
-      }
-      const reply = await this.heart.send(request, controller.signal);
-      // a cancelled request is not answered (MCP cancellation)
-      if (controller.signal.aborted) return;
-      this.relay(request, reply);
-    } finally {
-      if (this.inflight.get(request.id) === controller) this.inflight.delete(request.id);
-    }
-  }
-
-  private localCall(request: Request): ((signal: AbortSignal) => Promise<JsonObject>) | undefined {
+  private localCall(request: Inbound): ((signal: AbortSignal) => Promise<JsonObject>) | undefined {
     const tools = this.options.localTools;
     const params = request.params;
-    if (request.method !== "tools/call" || !tools || !isObject(params) || typeof params.name !== "string") {
-      return undefined;
-    }
+    if (request.method !== "tools/call" || !tools || typeof params?.name !== "string") return undefined;
     if (!tools.serves(params.name)) return undefined;
     const name = params.name;
     const args = isObject(params.arguments) ? params.arguments : {};
@@ -170,35 +188,51 @@ export class StdioProxy {
   }
 
   /** Notifications and client responses: Anytype acknowledges them; anything it answers is passed on. */
-  private async forward(message: unknown): Promise<void> {
+  private async forward(message: Inbound): Promise<void> {
     const reply = await this.heart.send(message);
-    if (reply.kind === "messages") reply.messages.forEach((m) => this.write(m));
+    if (reply.kind === "messages") reply.messages.forEach((m) => this.write(m.raw));
     if (reply.kind === "failed") {
-      const what = isObject(message) && typeof message.method === "string" ? message.method : "a message";
-      this.log(`could not deliver ${what} to Anytype: ${describeFailure(reply.failure, this.heart)}`);
+      this.log(
+        `could not deliver ${message.method ?? "a response"} to Anytype: ${describeFailure(reply.failure, this.heart)}`,
+      );
     }
   }
 
-  private relay(request: Request, reply: HeartReply): void {
+  /**
+   * Writes Anytype's answer as it came. Only an answer the proxy must change
+   * (transform returns a new result) is re-encoded, under the request's own id.
+   */
+  private relay(request: Inbound, reply: HeartReply, transform?: (result: JsonObject) => JsonObject | undefined): void {
     switch (reply.kind) {
       case "cancelled":
         return;
       case "accepted":
         this.fail(request, "Anytype accepted the request without answering it");
         return;
+      case "sessionExpired":
+        this.fail(request, SESSION_EXPIRED);
+        return;
       case "failed":
         this.fail(request, describeFailure(reply.failure, this.heart));
         return;
       case "messages": {
         let answered = false;
-        for (let message of reply.messages) {
-          // one message per POST: an error Anytype could not attribute is about this request
-          if (message.id === null && "error" in message) message = { ...message, id: request.id };
-          if (message.id === request.id && ("result" in message || "error" in message)) {
+        for (const message of reply.messages) {
+          const id = idOf(message);
+          const isAnswer = "result" in message.parsed || "error" in message.parsed;
+          if (isAnswer && id === "null" && isObject(message.parsed.error)) {
+            // one message per POST: an error Anytype could not attribute is about this request
             answered = true;
-            if (request.method === "tools/list") message = this.withLocalTools(message);
+            this.write(`{"jsonrpc":"2.0","id":${request.id},"error":${JSON.stringify(message.parsed.error)}}`);
+            continue;
           }
-          this.write(message);
+          if (isAnswer && id !== undefined && sameId(id, request.id!)) {
+            answered = true;
+            const changed = isObject(message.parsed.result) ? transform?.(message.parsed.result) : undefined;
+            this.write(changed ? frameResult(request.id!, changed) : message.raw);
+            continue;
+          }
+          this.write(message.raw);
         }
         if (!answered) this.fail(request, "Anytype's reply did not answer the request");
         return;
@@ -206,38 +240,81 @@ export class StdioProxy {
     }
   }
 
-  private withLocalTools(message: JsonObject): JsonObject {
+  private withLocalTools(result: JsonObject): JsonObject | undefined {
     const tools = this.options.localTools;
-    if (!tools || !isObject(message.result) || !Array.isArray(message.result.tools)) return message;
+    if (!tools || !Array.isArray(result.tools)) return undefined;
     const served = new Set(
-      message.result.tools.map((tool: unknown) => (isObject(tool) && typeof tool.name === "string" ? tool.name : "")),
+      result.tools.map((tool: unknown) => (isObject(tool) && typeof tool.name === "string" ? tool.name : "")),
     );
     const local = tools.listing(served);
-    if (local.length === 0) return message;
-    return { ...message, result: { ...message.result, tools: [...message.result.tools, ...local] } };
+    return local.length === 0 ? undefined : { ...result, tools: [...result.tools, ...local] };
   }
 
   /** A failure the proxy reports itself: in-band on tools/call, a JSON-RPC error elsewhere. */
-  private fail(request: Request, text: string): void {
-    if (request.method === "tools/call") this.write(resultResponse(request.id, toolError(text)));
-    else this.write(errorResponse(request.id, INTERNAL_ERROR, text));
-  }
-
-  private cancel(id: unknown): void {
-    if (typeof id !== "string" && typeof id !== "number") return;
-    this.inflight.get(id)?.abort();
+  private fail(request: Inbound, text: string): void {
+    if (request.method === "tools/call") this.write(frameResult(request.id!, toolError(text)));
+    else this.write(frameError(request.id!, INTERNAL_ERROR, text));
   }
 }
 
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+/**
+ * Splits stdin into lines without holding more than maxBytes of one: a longer
+ * line is dropped as it streams in and reported once.
+ */
+export function readLines(
+  input: Readable,
+  onLine: (line: string) => void,
+  onOversized: () => void,
+  maxBytes = MAX_MESSAGE_BYTES,
+): Promise<void> {
+  let parts: Buffer[] = [];
+  let size = 0;
+  let dropping = false;
+  const emit = () => {
+    const line = Buffer.concat(parts).toString("utf8").replace(/\r$/, "");
+    if (line.trim() !== "") onLine(line);
+  };
+  input.on("data", (data: Buffer | string) => {
+    const chunk = typeof data === "string" ? Buffer.from(data) : data;
+    let start = 0;
+    for (;;) {
+      const newline = chunk.indexOf(10, start);
+      const end = newline === -1 ? chunk.length : newline;
+      if (!dropping && end > start) {
+        size += end - start;
+        if (size > maxBytes) {
+          dropping = true;
+          parts = [];
+          onOversized();
+        } else {
+          parts.push(chunk.subarray(start, end));
+        }
+      }
+      if (newline === -1) return;
+      if (!dropping) emit();
+      parts = [];
+      size = 0;
+      dropping = false;
+      start = newline + 1;
+    }
+  });
+  return new Promise((resolve) => {
+    const finish = () => {
+      if (!dropping && parts.length > 0) emit();
+      parts = [];
+      resolve();
+    };
+    input.once("end", finish);
+    input.once("error", finish);
+  });
 }
 
 export interface StartOptions {
-  baseUrl: string;
-  tier: Tier;
-  headers: Record<string, string>;
-  legacyFallback?: LegacyFallback;
+  baseUrl?: string;
+  tier?: Tier;
+  headers?: Record<string, string>;
+  filesDir?: string;
+  configError?: string;
   input?: Readable;
   output?: Writable;
   log?: (line: string) => void;
@@ -245,10 +322,10 @@ export interface StartOptions {
 }
 
 export interface RunningProxy {
-  /** Resolves when stdin has ended and the session (if any) is closed. */
+  /** Resolves when stdin has ended, every call received has been answered, and the session is closed. */
   closed: Promise<void>;
-  /** Ends the curated-tier session, if one is open. */
-  close(): Promise<void>;
+  /** Cancels calls in flight and closes the session (for a signal). */
+  abort(): Promise<void>;
 }
 
 /** Wires stdin and stdout to Anytype's /mcp/{tier}. */
@@ -256,31 +333,26 @@ export function startStdioProxy(options: StartOptions): RunningProxy {
   const input = options.input ?? process.stdin;
   const output = options.output ?? process.stdout;
   const log = options.log ?? ((line: string) => console.error(line));
-  const heart = new HeartClient({
-    baseUrl: options.baseUrl,
-    tier: options.tier,
-    headers: options.headers,
-    fetch: options.fetch,
-  });
+  const baseUrl = options.baseUrl ?? DEFAULT_BASE_URL;
+  const tier = options.tier ?? "full";
+  const headers = options.headers ?? {};
+  const heart = new HeartClient({ baseUrl, tier, headers, fetch: options.fetch });
   const localTools =
-    options.tier === "full"
-      ? new LocalFileTools({ baseUrl: options.baseUrl, headers: options.headers, fetch: options.fetch })
+    tier === "full" && options.filesDir
+      ? new LocalFileTools({ baseUrl, headers, filesDir: options.filesDir, fetch: options.fetch })
       : undefined;
   // the host going away mid-answer is not an error worth crashing on
-  output.on("error", (error) => log(`stdout: ${errorText(error)}`));
-  const write = (message: unknown) => {
-    output.write(JSON.stringify(message) + "\n");
-  };
-  const proxy = new StdioProxy(
-    { heart, tier: options.tier, localTools, legacyFallback: options.legacyFallback, log },
-    write,
-  );
-
-  const lines = createInterface({ input, crlfDelay: Infinity });
-  lines.on("line", (line) => {
-    if (line.trim() === "") return;
-    proxy.receive(line).catch((error) => log(`anytype-mcp: ${errorText(error)}`));
+  output.on("error", (error) => log(`stdout: ${error.message}`));
+  const proxy = new StdioProxy({ heart, localTools, configError: options.configError, log }, (line) => {
+    output.write(line + "\n");
   });
-  const closed = new Promise<void>((resolve) => lines.once("close", resolve)).then(() => heart.close());
-  return { closed, close: () => heart.close() };
+
+  const ended = readLines(
+    input,
+    (line) =>
+      void proxy.receive(line).catch((error) => log(`anytype-mcp: ${error instanceof Error ? error.message : error}`)),
+    () => proxy.oversized(),
+  );
+  const closed = ended.then(() => proxy.close());
+  return { closed, abort: () => proxy.close({ abort: true }) };
 }

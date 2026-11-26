@@ -11,24 +11,35 @@
 //   initialize, require it afterwards, and answer 404 once it has expired;
 // - MCP-Protocol-Version, when sent, must name a revision the server speaks.
 //
-// A server older than /mcp has no such route: gin's plain-text 404.
+// An Anytype older than /mcp has no such route: gin's plain-text 404.
 
 import { debug } from "../utils/debug";
 import type { Tier } from "./config";
-import { isMessage, isObject, isRequest, type JsonObject } from "./jsonrpc";
+import { isObject, oneLine, rawMember, sameId, type Inbound, type JsonObject } from "./jsonrpc";
 
 export type HeartFailure =
-  | { kind: "unreachable"; detail: string }
+  | { kind: "unreachable"; code?: string }
   | { kind: "timeout"; ms: number }
-  /** routeMissing: a 404 that is not Anytype's JSON — the route does not exist on this server. */
-  | { kind: "http"; status: number; message: string; routeMissing: boolean }
-  | { kind: "unreadable"; status: number; detail: string };
+  /** message: Anytype's own error message, when the body was Anytype's error JSON. */
+  | { kind: "http"; status: number; message?: string; routeMissing: boolean }
+  | { kind: "redirect"; status: number }
+  | { kind: "unreadable"; status: number; detail: string }
+  /** Anytype answered the proxy's own initialize with a JSON-RPC error. */
+  | { kind: "rejected"; message: string }
+  | { kind: "closed" };
+
+/** One JSON-RPC message from Anytype: its text as sent (relayed as is) and its parse. */
+export interface HeartMessage {
+  raw: string;
+  parsed: JsonObject;
+}
 
 export type HeartReply =
-  /** JSON-RPC messages to relay, whatever the HTTP status they came with. */
-  | { kind: "messages"; messages: JsonObject[] }
+  | { kind: "messages"; messages: HeartMessage[] }
   | { kind: "accepted" }
   | { kind: "cancelled" }
+  /** The session expired; a new one is open, but this tool call was not run in it. */
+  | { kind: "sessionExpired" }
   | { kind: "failed"; failure: HeartFailure };
 
 export interface HeartClientOptions {
@@ -40,12 +51,13 @@ export interface HeartClientOptions {
   timeoutMs?: number;
 }
 
-/**
- * Anytype bounds a call at 60 s itself; this only catches a connection that
- * never answers.
- */
+/** Anytype bounds a call at 60 s itself; this only catches a connection that never answers. */
 export const DEFAULT_TIMEOUT_MS = 120_000;
 const CLOSE_TIMEOUT_MS = 2_000;
+/** Anytype buffers at most 32 MiB of a response; anything past this is not Anytype. */
+const MAX_REPLY_BYTES = 48 << 20;
+/** An error response is read only this far: it is a diagnostic, not content. */
+const MAX_ERROR_BYTES = 64 << 10;
 
 export class HeartClient {
   readonly endpoint: string;
@@ -55,9 +67,13 @@ export class HeartClient {
   private readonly timeoutMs: number;
   private sessionId?: string;
   private protocolVersion?: string;
-  private initializeParams?: unknown;
-  private reinitializing?: Promise<boolean>;
-  private reinitializeCount = 0;
+  private initializeParams?: JsonObject;
+  /** Set when Anytype ended the session; the next message opens a new one first. */
+  private needsSession = false;
+  private renewal?: Promise<HeartFailure | undefined>;
+  private initializing?: Promise<unknown>;
+  private closing = false;
+  private renewals = 0;
 
   constructor(options: HeartClientOptions) {
     this.baseUrl = options.baseUrl;
@@ -78,32 +94,94 @@ export class HeartClient {
   }
 
   /**
-   * Forwards one message. A curated-tier session that expired (Anytype idles
-   * them out after 30 minutes) is re-opened with the client's own initialize
-   * parameters and the message is sent once more: a stdio client has no way
-   * to re-initialize by itself.
+   * Forwards one message. On the curated tiers Anytype ends a session idle for
+   * 30 minutes; a stdio client cannot re-initialize, so the proxy opens a new
+   * session with the client's own initialize parameters. A tool call that met
+   * the expired session is not run again: its arguments may name numbered
+   * results of the old session, which in the new one could be other objects.
    */
-  async send(message: unknown, signal?: AbortSignal): Promise<HeartReply> {
-    const initialize = isRequest(message) && message.method === "initialize";
-    if (initialize) {
-      // a new initialize starts over; a session it replaces is ended, not leaked
-      await this.close();
-      this.initializeParams = message.params;
-      this.protocolVersion = undefined;
+  async send(message: Inbound, signal?: AbortSignal): Promise<HeartReply> {
+    if (this.closing) return { kind: "failed", failure: { kind: "closed" } };
+    if (message.kind === "request" && message.method === "initialize") return this.initialize(message);
+    if (this.needsSession) {
+      const failure = await this.renew();
+      if (failure) return { kind: "failed", failure };
     }
-    const sentSession = this.sessionId;
-    let reply = await this.post(message, signal);
-    if (!initialize && sentSession && sessionGone(reply) && (await this.reinitialize(sentSession))) {
-      reply = await this.post(message, signal);
+    const sent = this.sessionId;
+    const reply = await this.post(message.raw, signal, message.method);
+    if (!sent || !sessionGone(reply)) return reply;
+    if (this.sessionId === sent) {
+      this.sessionId = undefined;
+      this.needsSession = true;
     }
-    if (initialize && reply.kind === "messages") {
-      this.protocolVersion = answeredVersion(reply.messages, message.id);
-    }
-    return reply;
+    const failure = await this.renew();
+    if (failure) return { kind: "failed", failure };
+    if (message.method === "tools/call") return { kind: "sessionExpired" };
+    if (signal?.aborted) return { kind: "cancelled" };
+    return this.post(message.raw, signal, message.method);
   }
 
-  /** Ends a curated-tier session, best effort: Anytype caps sessions per key. */
+  /**
+   * Ends a curated-tier session (Anytype caps sessions per key), after any
+   * initialize still in flight has answered, so a session minted while the
+   * proxy shuts down is ended too.
+   */
   async close(): Promise<void> {
+    this.closing = true;
+    await this.initializing?.catch(() => {});
+    await this.renewal?.catch(() => {});
+    await this.endSession();
+  }
+
+  /** Not cancellable (MCP forbids cancelling initialize): its answer may carry a session to end later. */
+  private async initialize(message: Inbound): Promise<HeartReply> {
+    const run = async (): Promise<HeartReply> => {
+      // a new initialize starts over; the session it replaces is ended, not leaked
+      await this.endSession();
+      this.needsSession = false;
+      this.initializeParams = message.params;
+      this.protocolVersion = undefined;
+      const reply = await this.post(message.raw, undefined, "initialize");
+      if (reply.kind === "messages") this.protocolVersion = answeredVersion(reply.messages, message.id!);
+      return reply;
+    };
+    const running = run();
+    this.initializing = running;
+    try {
+      return await running;
+    } finally {
+      if (this.initializing === running) this.initializing = undefined;
+    }
+  }
+
+  /** One renewal at a time; every message that needs it waits for the same one. */
+  private renew(): Promise<HeartFailure | undefined> {
+    this.renewal ??= this.openSession().finally(() => {
+      this.renewal = undefined;
+    });
+    return this.renewal;
+  }
+
+  private async openSession(): Promise<HeartFailure | undefined> {
+    if (this.closing) return { kind: "closed" };
+    if (!this.needsSession) return undefined;
+    const id = `"anytype-mcp-renew-${++this.renewals}"`;
+    const params = JSON.stringify(this.initializeParams ?? {});
+    const reply = await this.post(`{"jsonrpc":"2.0","id":${id},"method":"initialize","params":${params}}`);
+    if (reply.kind === "failed") return reply.failure;
+    const answer = reply.kind === "messages" ? reply.messages.find((m) => idOf(m) && sameId(idOf(m)!, id)) : undefined;
+    if (answer && isObject(answer.parsed.error)) {
+      return { kind: "rejected", message: boundedText(answer.parsed.error.message) ?? "no details" };
+    }
+    if (!answer || !this.sessionId) {
+      return { kind: "unreadable", status: 200, detail: "initialize opened no session" };
+    }
+    this.needsSession = false;
+    await this.post('{"jsonrpc":"2.0","method":"notifications/initialized"}');
+    return undefined;
+  }
+
+  private async endSession(): Promise<void> {
     const id = this.sessionId;
     if (!id) return;
     this.sessionId = undefined;
@@ -112,6 +190,7 @@ export class HeartClient {
       const response = await this.fetchImpl(this.endpoint, {
         method: "DELETE",
         headers: this.requestHeaders({ "Mcp-Session-Id": id }),
+        redirect: "manual",
         signal: deadline.signal,
       });
       await response.body?.cancel();
@@ -120,26 +199,6 @@ export class HeartClient {
     } finally {
       deadline.dispose();
     }
-  }
-
-  private reinitialize(stale: string): Promise<boolean> {
-    if (this.reinitializing) return this.reinitializing;
-    // another call already replaced the session
-    if (this.sessionId !== stale) return Promise.resolve(this.sessionId !== undefined);
-    this.reinitializing = this.openSession().finally(() => {
-      this.reinitializing = undefined;
-    });
-    return this.reinitializing;
-  }
-
-  private async openSession(): Promise<boolean> {
-    this.sessionId = undefined;
-    const id = `anytype-mcp-reinitialize-${++this.reinitializeCount}`;
-    const reply = await this.post({ jsonrpc: "2.0", id, method: "initialize", params: this.initializeParams });
-    if (reply.kind !== "messages" || !this.sessionId) return false;
-    if (!reply.messages.some((m) => m.id === id && isObject(m.result))) return false;
-    await this.post({ jsonrpc: "2.0", method: "notifications/initialized" });
-    return true;
   }
 
   private requestHeaders(extra: Record<string, string> = {}): Record<string, string> {
@@ -151,12 +210,11 @@ export class HeartClient {
     };
   }
 
-  private async post(message: unknown, signal?: AbortSignal): Promise<HeartReply> {
-    const method = isObject(message) && typeof message.method === "string" ? message.method : "response";
+  private async post(body: string, signal?: AbortSignal, method = "renewal"): Promise<HeartReply> {
     const started = Date.now();
     const deadline = withDeadline(signal, this.timeoutMs);
     let response: Response;
-    let body: string;
+    let text: string | undefined;
     try {
       response = await this.fetchImpl(this.endpoint, {
         method: "POST",
@@ -164,87 +222,103 @@ export class HeartClient {
           "Content-Type": "application/json",
           Accept: "application/json, text/event-stream",
         }),
-        body: JSON.stringify(message),
+        body,
+        // a redirect would resend the message (tool arguments included) elsewhere
+        redirect: "manual",
         signal: deadline.signal,
       });
-      body = await response.text();
+      text = await readBounded(response, response.ok ? MAX_REPLY_BYTES : MAX_ERROR_BYTES);
     } catch (error) {
       if (signal?.aborted) return { kind: "cancelled" };
       if (deadline.timedOut()) return { kind: "failed", failure: { kind: "timeout", ms: this.timeoutMs } };
-      return { kind: "failed", failure: { kind: "unreachable", detail: networkDetail(error) } };
+      return { kind: "failed", failure: { kind: "unreachable", code: networkCode(error) } };
     } finally {
       deadline.dispose();
     }
     debug("mcp", { method, status: response.status, durationMs: Date.now() - started });
-    return this.interpret(response, body);
+    return this.interpret(response, text);
   }
 
-  private interpret(response: Response, body: string): HeartReply {
+  private interpret(response: Response, body: string | undefined): HeartReply {
     const session = response.headers.get("mcp-session-id");
     if (session) this.sessionId = session;
-    if (response.status === 202) return { kind: "accepted" };
-
+    const status = response.status;
+    if (status === 202) return { kind: "accepted" };
+    if (status >= 300 && status < 400) return { kind: "failed", failure: { kind: "redirect", status } };
+    if (body === undefined) {
+      return { kind: "failed", failure: { kind: "unreadable", status, detail: "the response is too large" } };
+    }
     const type = (response.headers.get("content-type") ?? "").toLowerCase();
     const messages = type.includes("text/event-stream") ? parseEventStream(body) : parseJsonMessages(body);
     if (messages.length > 0) return { kind: "messages", messages };
     if (response.ok) {
       if (body.trim() === "") return { kind: "accepted" };
-      return {
-        kind: "failed",
-        failure: { kind: "unreadable", status: response.status, detail: `content-type ${type || "none"}` },
-      };
+      return { kind: "failed", failure: { kind: "unreadable", status, detail: `content-type ${type || "none"}` } };
     }
     const json = parseJson(body);
     return {
       kind: "failed",
       failure: {
         kind: "http",
-        status: response.status,
-        message: errorMessage(json, body, response.statusText),
-        routeMissing: response.status === 404 && json === undefined,
+        status,
+        message: isObject(json) ? boundedText(json.message) : undefined,
+        routeMissing: status === 404 && json === undefined,
       },
     };
   }
 }
 
-/** What the model or the host is told when Anytype could not be asked or refused at the HTTP level. */
+/**
+ * What the model or the host is told when Anytype could not be asked or
+ * refused at the HTTP level. Only Anytype's own error message is quoted; a
+ * body that is not Anytype's error JSON (a gateway page) is not.
+ */
 export function describeFailure(failure: HeartFailure, client: { baseUrl: string; endpoint: string }): string {
   const path = new URL(client.endpoint).pathname;
+  const said = (f: { status: number; message?: string }) =>
+    f.message ? `HTTP ${f.status}: ${f.message}` : `HTTP ${f.status}`;
   switch (failure.kind) {
     case "unreachable":
       return (
-        `Cannot reach Anytype at ${client.baseUrl} (${failure.detail}). Ask the user to start the Anytype app, ` +
-        "or to set ANYTYPE_API_BASE_URL if it listens elsewhere; changing the call will not help."
+        `Cannot reach Anytype at ${client.baseUrl}${failure.code ? ` (${failure.code})` : ""}. Ask the user to start ` +
+        "the Anytype app, or to set ANYTYPE_API_BASE_URL if it listens elsewhere; changing the call will not help."
       );
     case "timeout":
       return `Anytype at ${client.baseUrl} did not answer within ${Math.round(failure.ms / 1000)} s. Ask the user whether the Anytype app is responding.`;
+    case "redirect":
+      return `Anytype at ${client.baseUrl} answered HTTP ${failure.status} with a redirect, which is not followed. Ask the user to check ANYTYPE_API_BASE_URL.`;
     case "unreadable":
-      return `Anytype answered HTTP ${failure.status} without a JSON-RPC message (${failure.detail}).`;
+      return `Anytype answered HTTP ${failure.status} without a usable JSON-RPC message (${failure.detail}).`;
+    case "rejected":
+      return `Anytype refused to open a new session: ${failure.message}`;
+    case "closed":
+      return "The Anytype MCP proxy is shutting down.";
     case "http":
       switch (failure.status) {
         case 401:
           return (
-            `Anytype rejected the API key (HTTP 401: ${failure.message}). Ask the user to check the ` +
+            `Anytype rejected the API key (${said(failure)}). Ask the user to check the ` +
             '"Authorization": "Bearer <key>" entry of OPENAPI_MCP_HEADERS (Anytype → Settings → API keys); ' +
             "changing the call will not help."
           );
         case 403:
           return (
-            `Anytype refused the API key (HTTP 403: ${failure.message}). Ask the user to create a key in ` +
-            "Anytype → Settings → API keys and put it in OPENAPI_MCP_HEADERS; changing the call will not help."
+            `Anytype refused the request (${said(failure)}). Ask the user to check the API key's scope, or to create ` +
+            "a key in Anytype → Settings → API keys; changing the call will not help."
           );
         case 404:
           if (failure.routeMissing) {
             return (
-              `Anytype at ${client.baseUrl} does not serve MCP at ${path} (HTTP 404): this Anytype version ` +
-              "predates its built-in MCP server. Ask the user to update the Anytype app."
+              `Anytype at ${client.baseUrl} does not serve MCP at ${path} (HTTP 404). The built-in MCP server needs ` +
+              "Anytype with heart >= 0.51.6 (the first version with /mcp). Ask the user to update Anytype, or to pin " +
+              "@anyproto/anytype-mcp@2.0.3 for an older Anytype."
             );
           }
-          return `Anytype answered HTTP 404: ${failure.message}`;
+          return `Anytype answered ${said(failure)}`;
         case 429:
-          return `Anytype is busy (HTTP 429: ${failure.message}). Wait for other calls to finish, then retry.`;
+          return `Anytype is busy (${said(failure)}). Wait for other calls to finish, then retry.`;
         default:
-          return `Anytype answered HTTP ${failure.status}: ${failure.message}`;
+          return `Anytype answered ${said(failure)}`;
       }
   }
 }
@@ -258,10 +332,16 @@ function sessionGone(reply: HeartReply): boolean {
   );
 }
 
-function answeredVersion(messages: JsonObject[], id: unknown): string | undefined {
+export function idOf(message: HeartMessage): string | undefined {
+  return rawMember(message.raw, "id");
+}
+
+function answeredVersion(messages: HeartMessage[], id: string): string | undefined {
   for (const message of messages) {
-    if (message.id === id && isObject(message.result) && typeof message.result.protocolVersion === "string") {
-      return message.result.protocolVersion;
+    const result = message.parsed.result;
+    const answers = idOf(message);
+    if (answers && sameId(answers, id) && isObject(result) && typeof result.protocolVersion === "string") {
+      return result.protocolVersion;
     }
   }
   return undefined;
@@ -275,15 +355,15 @@ function parseJson(text: string): unknown {
   }
 }
 
-function parseJsonMessages(text: string): JsonObject[] {
+function parseJsonMessages(text: string): HeartMessage[] {
   const parsed = parseJson(text);
-  if (Array.isArray(parsed)) return parsed.filter(isMessage);
-  return isMessage(parsed) ? [parsed] : [];
+  if (isObject(parsed) && parsed.jsonrpc === "2.0") return [{ raw: oneLine(text), parsed }];
+  return [];
 }
 
 /** A buffered text/event-stream body: every `data:` payload that is a JSON-RPC message, in order. */
-export function parseEventStream(text: string): JsonObject[] {
-  const messages: JsonObject[] = [];
+export function parseEventStream(text: string): HeartMessage[] {
+  const messages: HeartMessage[] = [];
   for (const event of text.split(/\r?\n\r?\n/)) {
     const data = event
       .split(/\r?\n/)
@@ -291,27 +371,55 @@ export function parseEventStream(text: string): JsonObject[] {
       .map((line) => line.slice(5).replace(/^ /, ""))
       .join("\n");
     if (!data) continue;
-    const parsed = parseJson(data);
-    if (isMessage(parsed)) messages.push(parsed);
+    messages.push(...parseJsonMessages(data));
   }
   return messages;
 }
 
-function errorMessage(json: unknown, body: string, statusText: string): string {
-  if (isObject(json) && typeof json.message === "string" && json.message) return json.message;
-  const text = body.trim();
-  return text ? text.slice(0, 500) : statusText || "no details";
+/** A diagnostic string from Anytype, bounded and on one line. */
+function boundedText(value: unknown): string | undefined {
+  if (typeof value !== "string" || value === "") return undefined;
+  // eslint-disable-next-line no-control-regex
+  const text = value.replace(/[\u0000-\u001f\u007f]+/g, " ").trim();
+  return text.length > 300 ? `${text.slice(0, 300)}…` : text;
 }
 
-function networkDetail(error: unknown): string {
-  const cause = isObject(error) ? (error as { cause?: unknown }).cause : undefined;
-  if (isObject(cause) && typeof cause.code === "string") return cause.code;
-  if (cause instanceof Error) return cause.message;
-  return error instanceof Error ? error.message : String(error);
+/** The body as text, or undefined past limit bytes (the rest is not read). */
+export async function readBounded(response: Response, limit: number): Promise<string | undefined> {
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > limit) {
+      await reader.cancel();
+      return undefined;
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+/**
+ * A system error code (ECONNREFUSED, ...) and nothing else: fetch's messages
+ * can quote request headers, which carry the key.
+ */
+export function networkCode(error: unknown): string | undefined {
+  const cause = (error as { cause?: { code?: unknown } } | undefined)?.cause;
+  return typeof cause?.code === "string" && /^[A-Z][A-Z0-9_]*$/.test(cause.code) ? cause.code : undefined;
+}
+
+export interface Deadline {
+  signal: AbortSignal;
+  timedOut(): boolean;
+  dispose(): void;
 }
 
 /** An abort signal that fires on the caller's signal or after ms, whichever comes first (Node 18 has no AbortSignal.any). */
-function withDeadline(signal: AbortSignal | undefined, ms: number) {
+export function withDeadline(signal: AbortSignal | undefined, ms: number): Deadline {
   const controller = new AbortController();
   let timedOut = false;
   const timer = setTimeout(() => {

@@ -1,19 +1,21 @@
 import { ApiKeyGenerator } from "./auth/get-key";
-import { initProxy, loadOpenApiSpec } from "./legacy/init-server";
-import { hasAuthorization, parseHeadersFromEnv, resolveBaseUrl, resolveTier } from "./proxy/config";
-import { legacyFallback } from "./proxy/legacy-fallback";
+import { ConfigError, loadConfig, resolveBaseUrl } from "./proxy/config";
 import { startStdioProxy } from "./proxy/stdio-proxy";
-import { determineBaseUrl } from "./utils/base-url";
 
 export const usage = `Usage:
   anytype-mcp [run] [--tier small|large|full]   proxy stdio to Anytype's built-in MCP server (default tier: full)
-  anytype-mcp run <openapi-spec-url-or-file>    serve tools generated from that OpenAPI document (legacy)
-  anytype-mcp get-key [<openapi-spec>]          pair with Anytype and print an API key
+  anytype-mcp get-key                           pair with Anytype and print an API key
 
 Environment:
-  OPENAPI_MCP_HEADERS    JSON headers, e.g. {"Authorization":"Bearer <key>"}
-  ANYTYPE_API_BASE_URL   Anytype's API address (default http://127.0.0.1:31009)
-  ANYTYPE_MCP_TIER       small, large or full, when --tier is not given`;
+  OPENAPI_MCP_HEADERS     JSON headers, e.g. {"Authorization":"Bearer <key>"}
+  ANYTYPE_API_BASE_URL    Anytype's API address (default http://127.0.0.1:31009)
+  ANYTYPE_MCP_TIER        small, large or full, when --tier is not given
+  ANYTYPE_MCP_FILES_DIR   the only directory upload_local_file and download_file use (default ~/.anytype-mcp/files)`;
+
+/** Version 2 took an OpenAPI document to generate tools from; that path is gone. */
+const SPEC_ARGUMENT_GONE =
+  "anytype-mcp 3 no longer generates tools from an OpenAPI document: remove the spec argument to use the MCP " +
+  "server built into Anytype (heart >= 0.51.6), or pin @anyproto/anytype-mcp@2.0.3 for an older Anytype.";
 
 /** Splits `--tier <name>` / `--tier=<name>` from the positional arguments. */
 export function parseArgs(args: string[]): { positional: string[]; tier?: string } {
@@ -22,7 +24,7 @@ export function parseArgs(args: string[]): { positional: string[]; tier?: string
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === "--tier") {
-      if (i + 1 >= args.length) throw new Error("--tier needs a value: small, large or full");
+      if (i + 1 >= args.length) throw new ConfigError("--tier needs a value: small, large or full");
       tier = args[++i];
     } else if (arg.startsWith("--tier=")) {
       tier = arg.slice("--tier=".length);
@@ -33,46 +35,48 @@ export function parseArgs(args: string[]): { positional: string[]; tier?: string
   return { positional, tier };
 }
 
-async function generateApiKey(specPath?: string) {
-  // a spec named explicitly says where the server is; otherwise ANYTYPE_API_BASE_URL or the default
-  const baseUrl = specPath ? determineBaseUrl(await loadOpenApiSpec(specPath)) : resolveBaseUrl();
-  await new ApiKeyGenerator(baseUrl).generateApiKey();
-}
-
-function runProxy(tierFlag: string | undefined) {
-  const tier = resolveTier(tierFlag);
-  const baseUrl = resolveBaseUrl();
-  const headers = parseHeadersFromEnv();
-  if (!hasAuthorization(headers)) {
-    console.error(
-      'OPENAPI_MCP_HEADERS has no "Authorization": "Bearer <key>" entry; Anytype will refuse every call. ' +
-        "Create a key in Anytype → Settings → API keys, or run `anytype-mcp get-key`.",
-    );
+/**
+ * Serves stdio. A configuration the proxy cannot run with is still served:
+ * every request is answered with the reason, which the host shows the user,
+ * where an exit would leave only a line in a log file.
+ */
+function runProxy(tierFlag: string | undefined, configError?: string) {
+  let options: Parameters<typeof startStdioProxy>[0] = { configError };
+  if (!configError) {
+    try {
+      const config = loadConfig(tierFlag);
+      config.warnings.forEach((warning) => console.error(warning));
+      options = config;
+      console.error(`Anytype MCP: forwarding stdio to ${new URL(`/mcp/${config.tier}`, config.baseUrl).href}`);
+    } catch (error) {
+      if (!(error instanceof ConfigError)) throw error;
+      options = { configError: error.message };
+    }
   }
-  const proxy = startStdioProxy({ baseUrl, tier, headers, legacyFallback });
-  console.error(`Anytype MCP: forwarding stdio to ${new URL(`/mcp/${tier}`, baseUrl).href}`);
+  if (options.configError) console.error(`Anytype MCP: ${options.configError}`);
+  const proxy = startStdioProxy(options);
   const stop = () => {
-    void proxy.close().finally(() => process.exit(0));
+    void proxy.abort().finally(() => process.exit(0));
   };
   process.once("SIGINT", stop);
   process.once("SIGTERM", stop);
-  // stdin closing (the host going away) ends the session; the process then exits on its own
+  // stdin closing (the host going away) drains the calls received, ends the session, and the process exits
   return proxy;
 }
 
 export async function main(args: string[] = process.argv.slice(2)) {
-  const { positional, tier } = parseArgs(args);
-  const [command, specPath] = positional;
+  let parsed: ReturnType<typeof parseArgs>;
+  try {
+    parsed = parseArgs(args);
+  } catch (error) {
+    runProxy(undefined, (error as Error).message);
+    return;
+  }
+  const [command, ...rest] = parsed.positional;
   if (!command || command === "run") {
-    if (specPath) {
-      if (tier !== undefined)
-        console.error("--tier selects a table of Anytype's built-in MCP server; it is ignored with a spec");
-      await initProxy(specPath);
-    } else {
-      runProxy(tier);
-    }
+    runProxy(parsed.tier, rest.length > 0 ? SPEC_ARGUMENT_GONE : undefined);
   } else if (command === "get-key") {
-    await generateApiKey(specPath);
+    await new ApiKeyGenerator(resolveBaseUrl()).generateApiKey();
   } else if (command === "help" || command === "--help" || command === "-h") {
     console.error(usage);
   } else {

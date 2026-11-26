@@ -1,84 +1,75 @@
-// The two tools the proxy serves itself, beside Anytype's full tier: both need
+// The two tools the proxy serves itself, beside Anytype's full tier. Both need
 // the filesystem of the machine the MCP host runs on, which Anytype's MCP
-// server cannot see. Anytype's upload_file fetches a URL; download_file is
-// excluded there because bytes have no text rendering. Here a download is
-// saved to a private temporary file and its path returned, and a local file is
-// uploaded through the same REST route the app uses (multipart), with the
-// caller's own key. A tool Anytype starts serving under the same name takes
-// precedence: the proxy then steps aside.
+// server cannot see: Anytype's upload_file fetches a URL, and download_file is
+// excluded there because bytes have no text rendering. Both are confined to
+// one directory (files.ts) and use the caller's own key against Anytype's REST
+// routes. A tool Anytype starts serving under the same name takes precedence.
 
 import { randomUUID } from "node:crypto";
-import fs from "node:fs";
-import { readFile, stat } from "node:fs/promises";
-import { homedir } from "node:os";
-import { basename, isAbsolute, join } from "node:path";
-import { Readable } from "node:stream";
+import { basename, extname } from "node:path";
 import type { ReadableStream as WebReadableStream } from "node:stream/web";
-import { saveDownload } from "../utils/download-file";
+import { FilesRoot, multipartFile, RootError } from "./files";
+import { networkCode, readBounded, withDeadline } from "./heart-client";
 import { isObject, toolError, type JsonObject } from "./jsonrpc";
 
-const definitions: JsonObject[] = [
-  {
-    name: "download_file",
-    description:
-      "Download a file's bytes to a private temporary directory on the computer running this MCP server and " +
-      "return its local path, filename, media_type and size. file_id is the file object's id, as upload_file " +
-      "and upload_local_file return it and file and image blocks reference it.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        space_id: { type: "string", description: "Space id, from `list_spaces`" },
-        file_id: { type: "string", description: "File object id" },
-      },
-      required: ["space_id", "file_id"],
-      additionalProperties: false,
-    },
-  },
-  {
-    name: "upload_local_file",
-    description:
-      "Upload a file from the computer running this MCP server into a space, by its path. Returns the stored " +
-      "file object's id, which file blocks, image blocks and icon_image values reference. For a file on the " +
-      "web, use upload_file with its url.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        space_id: { type: "string", description: "Space id, from `list_spaces`" },
-        path: { type: "string", description: "Absolute path of the file; a leading ~/ means the home directory" },
-        dry_run: { type: "boolean", description: "Validate and report without committing" },
-      },
-      required: ["space_id", "path"],
-      additionalProperties: false,
-    },
-  },
-];
+/** A whole transfer, body included, ends by then. */
+const TRANSFER_TIMEOUT_MS = 10 * 60_000;
+const MAX_ERROR_BYTES = 64 << 10;
+/** A file object's document is small: its blocks hold no content. */
+const MAX_OBJECT_BYTES = 1 << 20;
+
+/** Headers that would turn the whole-file download into part of it, or a 304. */
+const PARTIAL_HEADERS = /^(range|if-range|if-none-match|if-match|if-modified-since|if-unmodified-since)$/i;
+
+/** Extensions for the media types a download most often has; Anytype keeps a file's name without one. */
+const EXTENSIONS: Record<string, string> = {
+  "application/json": ".json",
+  "application/pdf": ".pdf",
+  "application/zip": ".zip",
+  "audio/mpeg": ".mp3",
+  "image/gif": ".gif",
+  "image/jpeg": ".jpg",
+  "image/png": ".png",
+  "image/svg+xml": ".svg",
+  "image/webp": ".webp",
+  "text/csv": ".csv",
+  "text/html": ".html",
+  "text/markdown": ".md",
+  "text/plain": ".txt",
+  "video/mp4": ".mp4",
+};
 
 export interface LocalFileToolsOptions {
   baseUrl: string;
   /** OPENAPI_MCP_HEADERS: Authorization carries the caller's key. */
   headers?: Record<string, string>;
+  filesDir: string;
   fetch?: typeof fetch;
 }
 
-/** A bad argument; its message is the repair the model reads. */
 class ArgumentError extends Error {}
-class UnreachableError extends Error {}
+class TransferError extends Error {}
 
 export class LocalFileTools {
   private readonly baseUrl: string;
   private readonly headers: Record<string, string>;
   private readonly fetchImpl: typeof fetch;
-  private active = new Set(definitions.map((tool) => tool.name as string));
+  private readonly root: FilesRoot;
+  private readonly definitions: JsonObject[];
+  private active: Set<string>;
 
   constructor(options: LocalFileToolsOptions) {
     this.baseUrl = options.baseUrl;
     this.headers = options.headers ?? {};
     this.fetchImpl = options.fetch ?? fetch;
+    this.root = new FilesRoot(options.filesDir);
+    this.definitions = definitions(options.filesDir);
+    this.active = new Set(this.definitions.map((tool) => tool.name as string));
   }
 
   /** The local tools to list beside Anytype's, leaving out any name Anytype already serves. */
   listing(served: ReadonlySet<string>): JsonObject[] {
-    const tools = definitions.filter((tool) => !served.has(tool.name as string));
+    const tools = this.definitions.filter((tool) => !served.has(tool.name as string));
     this.active = new Set(tools.map((tool) => tool.name as string));
     return tools.map((tool) => structuredClone(tool));
   }
@@ -89,85 +80,175 @@ export class LocalFileTools {
 
   /** A tools/call result; failures are in-band so the model can read them. */
   async call(name: string, args: JsonObject, signal?: AbortSignal): Promise<JsonObject> {
+    const deadline = withDeadline(signal, TRANSFER_TIMEOUT_MS);
     try {
       switch (name) {
         case "download_file":
-          return await this.download(args, signal);
+          return await this.download(args, deadline.signal);
         case "upload_local_file":
-          return await this.upload(args, signal);
+          return await this.upload(args, deadline.signal);
         default:
           return toolError(`${name} is not a local tool`);
       }
     } catch (error) {
       if (signal?.aborted) throw error;
-      if (error instanceof UnreachableError) {
-        return toolError(
-          `Cannot reach Anytype at ${this.baseUrl} (${error.message}). Ask the user to start the Anytype app; ` +
-            "changing the call will not help.",
-        );
+      if (deadline.timedOut())
+        return toolError(`the transfer did not finish within ${TRANSFER_TIMEOUT_MS / 60_000} minutes`);
+      if (error instanceof ArgumentError || error instanceof RootError || error instanceof TransferError) {
+        return toolError(error.message);
       }
-      return toolError(error instanceof Error ? error.message : String(error));
+      // a filesystem error: its message names a path under the root, never a header
+      return toolError(`the file could not be transferred (${(error as { code?: string }).code ?? "error"})`);
+    } finally {
+      deadline.dispose();
     }
   }
 
-  /** fetch, with a failure to connect told apart from everything after it. */
-  private async request(path: string, init: RequestInit): Promise<Response> {
-    try {
-      return await this.fetchImpl(new URL(path, this.baseUrl).href, init);
-    } catch (error) {
-      if (init.signal?.aborted) throw error;
-      const cause = (error as { cause?: { code?: unknown; message?: unknown } }).cause;
-      throw new UnreachableError(
-        typeof cause?.code === "string" ? cause.code : error instanceof Error ? error.message : String(error),
-      );
-    }
-  }
-
-  private async download(args: JsonObject, signal?: AbortSignal): Promise<JsonObject> {
-    onlyArguments("download_file", args, ["space_id", "file_id"]);
+  private async download(args: JsonObject, signal: AbortSignal): Promise<JsonObject> {
+    onlyArguments("download_file", args, ["space_id", "file_id", "width"]);
     const space = segment(args, "space_id");
     const file = segment(args, "file_id");
-    const response = await this.request(`/v2/spaces/${space}/files/${file}/content`, { headers: this.headers, signal });
-    if (!response.ok) return toolError(restError(response.status, await response.text()));
-    if (!response.body) return toolError("Anytype sent no file content");
-    const saved = await saveDownload(
-      Readable.fromWeb(response.body as unknown as WebReadableStream),
-      response.headers,
-      signal,
-    );
-    return { content: [{ type: "text", text: JSON.stringify(saved) }], structuredContent: { ...saved } };
+    const width = args.width;
+    if (width !== undefined && (typeof width !== "number" || !Number.isInteger(width) || width < 0)) {
+      throw new ArgumentError("width must be a whole number of pixels, or 0 for the original image");
+    }
+    const query = width !== undefined ? `?width=${width}` : "";
+    const headers = Object.fromEntries(Object.entries(this.headers).filter(([name]) => !PARTIAL_HEADERS.test(name)));
+    const response = await this.request(`/v2/spaces/${space}/files/${file}/content${query}`, { headers, signal });
+    if (response.status !== 200) {
+      if (response.ok) {
+        await response.body?.cancel();
+        throw new TransferError(`expected the whole file (HTTP 200), got HTTP ${response.status}; nothing was saved`);
+      }
+      return toolError(await restError(response));
+    }
+    if (!response.body) throw new TransferError("Anytype sent no file content");
+    const mediaType = (response.headers.get("content-type") ?? "application/octet-stream").split(";")[0].trim();
+    const name = await this.fileName(space, file, response.headers.get("content-disposition"), mediaType, signal);
+    const saved = await this.root.save(name, response.body as unknown as WebReadableStream, signal);
+    const receipt = { path: saved.path, filename: basename(saved.path), media_type: mediaType, size: saved.size };
+    return { content: [{ type: "text", text: JSON.stringify(receipt) }], structuredContent: receipt };
   }
 
-  private async upload(args: JsonObject, signal?: AbortSignal): Promise<JsonObject> {
+  /** The stored name: the response's, else the object's (Anytype sends none), else the id; plus an extension. */
+  private async fileName(
+    space: string,
+    file: string,
+    disposition: string | null,
+    mediaType: string,
+    signal: AbortSignal,
+  ) {
+    let name = disposition ? dispositionName(disposition) : undefined;
+    let ext: string | undefined;
+    if (!name) {
+      try {
+        // Anytype's file object is an AnyBlock document: properties.name (no extension) and properties.file_ext
+        const response = await this.request(`/v2/spaces/${space}/objects/${file}`, { headers: this.headers, signal });
+        const object = response.ok ? parseObject((await readBounded(response, MAX_OBJECT_BYTES)) ?? "") : undefined;
+        await response.body?.cancel().catch(() => {});
+        const properties = isObject(object?.properties) ? object.properties : {};
+        if (typeof properties.name === "string" && properties.name.trim()) name = properties.name;
+        if (typeof properties.file_ext === "string" && /^[A-Za-z0-9]{1,10}$/.test(properties.file_ext)) {
+          ext = `.${properties.file_ext}`;
+        }
+      } catch {
+        // a name is a convenience; the id will do
+      }
+    }
+    name ||= decodeURIComponent(file);
+    if (extname(name)) return name;
+    return `${name}${ext ?? EXTENSIONS[mediaType] ?? ""}`;
+  }
+
+  private async upload(args: JsonObject, signal: AbortSignal): Promise<JsonObject> {
     onlyArguments("upload_local_file", args, ["space_id", "path", "dry_run"]);
     const space = segment(args, "space_id");
-    const path = localPath(args.path);
     if (args.dry_run !== undefined && typeof args.dry_run !== "boolean") {
       throw new ArgumentError("dry_run must be true or false");
     }
-    let info;
+    const { handle, name } = await this.root.openForUpload(args.path);
     try {
-      info = await stat(path);
-    } catch {
-      throw new ArgumentError(`no file at ${path}`);
+      const form = multipartFile(handle, name);
+      const query = args.dry_run === true ? "?dry_run=true" : "";
+      const response = await this.request(`/v2/spaces/${space}/files${query}`, {
+        method: "POST",
+        // a fresh key per call: the proxy does not retry, so it only marks the write
+        headers: { ...this.headers, "Content-Type": form.contentType, "Idempotency-Key": randomUUID() },
+        body: form.body,
+        duplex: "half",
+        signal,
+      });
+      if (!response.ok) return toolError(await restError(response));
+      const text = (await readBounded(response, 1 << 20)) ?? "";
+      const parsed = parseObject(text);
+      return { content: [{ type: "text", text }], ...(parsed ? { structuredContent: parsed } : {}) };
+    } finally {
+      await handle.close().catch(() => {});
     }
-    if (!info.isFile()) throw new ArgumentError(`${path} is not a regular file`);
-
-    const form = new FormData();
-    form.append("file", await fileBlob(path), basename(path));
-    const query = args.dry_run === true ? "?dry_run=true" : "";
-    const response = await this.request(`/v2/spaces/${space}/files${query}`, {
-      method: "POST",
-      // a fresh key per call: the proxy does not retry, so it only marks the write
-      headers: { ...this.headers, "Idempotency-Key": randomUUID() },
-      body: form,
-      signal,
-    });
-    const text = await response.text();
-    if (!response.ok) return toolError(restError(response.status, text));
-    const parsed = parseObject(text);
-    return { content: [{ type: "text", text }], ...(parsed ? { structuredContent: parsed } : {}) };
   }
+
+  /** fetch without following redirects, a failure to connect told apart from the rest. */
+  private async request(path: string, init: RequestInit): Promise<Response> {
+    let response: Response;
+    try {
+      response = await this.fetchImpl(new URL(path, this.baseUrl).href, { ...init, redirect: "manual" });
+    } catch (error) {
+      if (init.signal?.aborted) throw error;
+      const code = networkCode(error);
+      throw new TransferError(
+        `Cannot reach Anytype at ${this.baseUrl}${code ? ` (${code})` : ""}. Ask the user to start the Anytype app; ` +
+          "changing the call will not help.",
+      );
+    }
+    if (response.status >= 300 && response.status < 400) {
+      await response.body?.cancel();
+      throw new TransferError(`Anytype answered HTTP ${response.status} with a redirect, which is not followed`);
+    }
+    return response;
+  }
+}
+
+function definitions(filesDir: string): JsonObject[] {
+  return [
+    {
+      name: "download_file",
+      description:
+        `Download a file's bytes into ${filesDir} on the computer running this MCP server and return its local ` +
+        "path, filename, media_type and size. The file gets a new name there; nothing is overwritten. file_id is " +
+        "the file object's id, as upload_file and upload_local_file return it and file and image blocks reference it.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          space_id: { type: "string", description: "Space id, from `list_spaces`" },
+          file_id: { type: "string", description: "File object id, or an icon_image value" },
+          width: {
+            type: "integer",
+            minimum: 0,
+            description: "Image variant width in pixels; 0 or absent for the original",
+          },
+        },
+        required: ["space_id", "file_id"],
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "upload_local_file",
+      description:
+        `Upload a file from ${filesDir} on the computer running this MCP server into a space. Only files in that ` +
+        "directory can be uploaded: ask the user to put the file there first. Returns the stored file object's id, " +
+        "which file blocks, image blocks and icon_image values reference. For a file on the web, use upload_file with its url.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          space_id: { type: "string", description: "Space id, from `list_spaces`" },
+          path: { type: "string", description: `The file's path relative to ${filesDir}, e.g. report.pdf` },
+          dry_run: { type: "boolean", description: "Validate and report without committing" },
+        },
+        required: ["space_id", "path"],
+        additionalProperties: false,
+      },
+    },
+  ];
 }
 
 function onlyArguments(tool: string, args: JsonObject, allowed: string[]) {
@@ -186,21 +267,16 @@ function segment(args: JsonObject, key: string): string {
   return encodeURIComponent(value);
 }
 
-function localPath(value: unknown): string {
-  if (typeof value !== "string" || value === "") throw new ArgumentError("path must be a file path");
-  const path = value === "~" || value.startsWith("~/") ? join(homedir(), value.slice(1)) : value;
-  if (!isAbsolute(path)) {
-    throw new ArgumentError(
-      `path must be absolute (the MCP server's working directory is not the user's); got ${value}`,
-    );
+function dispositionName(disposition: string): string | undefined {
+  const encoded = /filename\*\s*=\s*UTF-8''([^;]+)/i.exec(disposition)?.[1];
+  if (encoded) {
+    try {
+      return decodeURIComponent(encoded.trim());
+    } catch {
+      // fall through to the plain parameter
+    }
   }
-  return path;
-}
-
-/** Node 19.8+ reads the file lazily; older Node buffers it. */
-async function fileBlob(path: string): Promise<Blob> {
-  const open = (fs as { openAsBlob?: (path: string) => Promise<Blob> }).openAsBlob;
-  return open ? await open(path) : new Blob([await readFile(path)]);
+  return /filename\s*=\s*(?:"([^"]*)"|([^;]+))/i.exec(disposition)?.slice(1).find(Boolean)?.trim() || undefined;
 }
 
 function parseObject(text: string): JsonObject | undefined {
@@ -212,9 +288,9 @@ function parseObject(text: string): JsonObject | undefined {
   }
 }
 
-/** Anytype's error envelope (message, issues, hints) with the status beside it. */
-function restError(status: number, body: string): string {
-  const envelope = parseObject(body);
-  if (envelope) return JSON.stringify({ ...envelope, status });
-  return `Anytype answered HTTP ${status}: ${body.trim().slice(0, 500) || "no details"}`;
+/** Anytype's error envelope (message, issues, hints) with the status; another body is not quoted. */
+async function restError(response: Response): Promise<string> {
+  const envelope = parseObject((await readBounded(response, MAX_ERROR_BYTES)) ?? "");
+  if (envelope) return JSON.stringify({ ...envelope, status: response.status });
+  return `Anytype answered HTTP ${response.status}`;
 }
