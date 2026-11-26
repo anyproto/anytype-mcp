@@ -24,6 +24,27 @@
           "format": "string",
           "is_secret": true,
           "name": "OPENAPI_MCP_HEADERS"
+        },
+        {
+          "description": "Tool set of Anytype's built-in MCP server: full (default, one tool per API operation), large or small",
+          "is_required": false,
+          "format": "string",
+          "is_secret": false,
+          "name": "ANYTYPE_MCP_TIER"
+        },
+        {
+          "description": "Anytype API address. Default: http://127.0.0.1:31009 (anytype-cli: http://127.0.0.1:31012)",
+          "is_required": false,
+          "format": "string",
+          "is_secret": false,
+          "name": "ANYTYPE_API_BASE_URL"
+        },
+        {
+          "description": "The only directory upload_local_file reads from and download_file writes to (absolute path). Default: ~/.anytype-mcp/files",
+          "is_required": false,
+          "format": "string",
+          "is_secret": false,
+          "name": "ANYTYPE_MCP_FILES_DIR"
         }
       ]
     }

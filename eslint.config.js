@@ -25,6 +25,10 @@ export default [
     },
     rules: {
       ...tseslint.configs.recommended.rules,
+      // tsc checks identifiers against the Node types (fetch, URL, AbortSignal,
+      // and type-only names like RequestInit), which no-undef cannot see;
+      // typescript-eslint recommends turning it off for TypeScript
+      "no-undef": "off",
       "@typescript-eslint/no-explicit-any": "off",
       "@typescript-eslint/no-unused-vars": "off",
     },

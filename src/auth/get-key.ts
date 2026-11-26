@@ -1,112 +1,82 @@
-import axios from "axios";
-import * as readline from "readline";
+import * as readline from "node:readline";
+import { DEFAULT_BASE_URL } from "../proxy/config";
 
-interface AuthToken {
-  api_key: string;
-}
-
+/** Pairs with Anytype through the challenge flow and prints an API key with a ready configuration. */
 export class ApiKeyGenerator {
-  private readonly rl: readline.Interface;
-  private readonly appName: string = "anytype_mcp_server";
-  private readonly basePath: string;
+  private readonly appName = "anytype_mcp_server";
 
-  constructor(basePath: string) {
-    this.basePath = basePath;
-    this.rl = readline.createInterface({
-      input: process.stdin,
-      output: process.stdout,
+  constructor(
+    private readonly basePath: string,
+    private readonly fetchImpl: typeof fetch = fetch,
+  ) {}
+
+  private async post(path: string, body: unknown): Promise<{ data: Record<string, unknown>; headers: Headers }> {
+    const response = await this.fetchImpl(new URL(path, this.basePath).href, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      redirect: "manual",
     });
+    const text = await response.text();
+    let data: unknown;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = undefined;
+    }
+    if (!response.ok || typeof data !== "object" || data === null) {
+      const message =
+        typeof (data as { message?: unknown })?.message === "string" ? (data as { message: string }).message : "";
+      throw new Error(`Anytype answered HTTP ${response.status}${message ? `: ${message}` : ""}`);
+    }
+    return { data: data as Record<string, unknown>, headers: response.headers };
   }
 
-  private prompt(question: string): Promise<string> {
-    return new Promise<string>((resolve) => {
-      this.rl.question(question, resolve);
-    });
+  public async generateApiKey(): Promise<void> {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    try {
+      console.log("Starting authentication to get API key...");
+      const challenge = await this.post("/v1/auth/challenges", { app_name: this.appName });
+      if (typeof challenge.data.challenge_id !== "string") throw new Error("Anytype returned no challenge id");
+
+      console.log("Please check Anytype Desktop for the 4-digit code");
+      const code = await new Promise<string>((resolve) =>
+        rl.question("Enter the 4-digit code shown in Anytype Desktop: ", resolve),
+      );
+
+      const issued = await this.post("/v1/auth/api_keys", { challenge_id: challenge.data.challenge_id, code });
+      if (typeof issued.data.api_key !== "string") throw new Error("Anytype returned no API key");
+      console.log("Authenticated successfully!");
+      this.displaySuccessMessage(issued.data.api_key, issued.headers.get("anytype-version") ?? "");
+    } catch (error) {
+      console.error("Error:", error instanceof Error ? error.message : error);
+      process.exit(1);
+    } finally {
+      rl.close();
+    }
   }
 
   private displaySuccessMessage(apiKey: string, anytypeVersion: string): void {
     console.log(`\nYour API KEY: ${apiKey}`);
     console.log("\nAdd this to your MCP settings file as:");
-    console.log(`
-{
-  "mcpServers": {
-    "anytype": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "@anyproto/anytype-mcp",
-      ],
-      "env": {
-        "OPENAPI_MCP_HEADERS": "{\\"Authorization\\":\\"Bearer ${apiKey}\\", \\"Anytype-Version\\":\\"${anytypeVersion}\\"}"
-      }
-    }
+    console.log(JSON.stringify(configSnippet(apiKey, anytypeVersion, this.basePath), null, 2));
   }
 }
-`);
-  }
 
-  /**
-   * Start the authentication process with Anytype
-   * @returns Challenge ID to use with completeAuthentication
-   */
-  private async startAuthentication(): Promise<string> {
-    try {
-      const response = await axios.post(`${this.basePath}/v1/auth/challenges`, { app_name: this.appName });
-
-      if (!response.data?.challenge_id) {
-        throw new Error("Failed to get challenge ID");
-      }
-
-      return response.data.challenge_id;
-    } catch (error) {
-      console.error("Authentication error:", error instanceof Error ? error.message : error);
-      throw new Error("Failed to start authentication", { cause: error });
-    }
-  }
-
-  /**
-   * Complete the authentication process using the challenge ID and display code
-   * @param challengeId Challenge ID from startAuthentication
-   * @param code Display code shown in Anytype desktop
-   * @returns Authentication tokens
-   */
-  private async completeAuthentication(
-    challengeId: string,
-    code: string,
-  ): Promise<{ apiKey: string; anytypeVersion: string }> {
-    try {
-      const response = await axios.post<AuthToken>(`${this.basePath}/v1/auth/api_keys`, {
-        challenge_id: challengeId,
-        code: code,
-      });
-
-      if (!response.data?.api_key) {
-        throw new Error("Authentication failed: No api key received");
-      }
-
-      return { apiKey: response.data.api_key, anytypeVersion: response.headers["anytype-version"] };
-    } catch (error) {
-      console.error("Authentication error:", error instanceof Error ? error.message : error);
-      throw new Error("Failed to complete authentication", { cause: error });
-    }
-  }
-
-  public async generateApiKey(): Promise<void> {
-    try {
-      console.log("Starting authentication to get API key...");
-
-      const challengeId = await this.startAuthentication();
-      console.log("Please check Anytype Desktop for the 4-digit code");
-      const code = await this.prompt("Enter the 4-digit code shown in Anytype Desktop: ");
-
-      const { apiKey, anytypeVersion } = await this.completeAuthentication(challengeId, code);
-      console.log("Authenticated successfully!");
-      this.displaySuccessMessage(apiKey, anytypeVersion);
-    } catch (error) {
-      console.error("Error:", error instanceof Error ? error.message : error);
-      process.exit(1);
-    } finally {
-      this.rl.close();
-    }
-  }
+/**
+ * The host configuration for a key just issued. The key belongs to the
+ * Anytype it was paired with, so a non-default address goes in too: without
+ * it the host would send the key to the default port.
+ */
+export function configSnippet(apiKey: string, anytypeVersion: string, baseUrl: string) {
+  const headers = JSON.stringify({
+    Authorization: `Bearer ${apiKey}`,
+    ...(anytypeVersion ? { "Anytype-Version": anytypeVersion } : {}),
+  });
+  const origin = new URL(baseUrl).origin;
+  const env = {
+    OPENAPI_MCP_HEADERS: headers,
+    ...(origin !== new URL(DEFAULT_BASE_URL).origin ? { ANYTYPE_API_BASE_URL: origin } : {}),
+  };
+  return { mcpServers: { anytype: { command: "npx", args: ["-y", "@anyproto/anytype-mcp"], env } } };
 }
