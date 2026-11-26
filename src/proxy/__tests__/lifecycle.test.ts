@@ -258,6 +258,29 @@ describe("a body that breaks off", () => {
   });
 });
 
+describe("an upload whose connection closes before any answer", () => {
+  it("is unconfirmed once the body was sent, not unreachable", async () => {
+    heart = await new FakeHeart({
+      intercept: (request, res) => {
+        if (!request.path.endsWith("/files")) return false;
+        // the whole upload has been read; the connection drops before any header
+        res.destroy();
+        return true;
+      },
+    }).start();
+    dir = await mkdtemp(join(tmpdir(), "anytype-mcp-lifecycle-"));
+    await writeFile(join(dir, "a.txt"), "x");
+    const tools = new LocalFileTools({ baseUrl: heart.url, headers: auth, filesDir: dir });
+
+    const result = await tools.call("upload_local_file", { space_id: "s", path: "a.txt" });
+
+    expect(result.isError).toBe(true);
+    expect((result.content as Array<{ text: string }>)[0].text).toMatch(
+      /upload outcome is unconfirmed: the connection to Anytype closed before it answered\. Check the space/,
+    );
+  });
+});
+
 describe("shutdown", () => {
   it("makes a signal after stdin ended wait for the DELETE the end started", async () => {
     let deleted = false;

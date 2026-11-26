@@ -16,19 +16,17 @@ Environment:
  * Version 2 took an OpenAPI document to generate tools from; that path is gone.
  * The document also chose the server (its servers[0].url), so removing it
  * without setting ANYTYPE_API_BASE_URL would send the key to the default port.
+ * The proxy does not guess the address from where the spec was served: that
+ * may be a documentation host, and the key must not go there.
  */
-export function specArgumentGone(spec: string): string {
-  let origin = "the API origin you used (the spec's servers[0].url)";
-  try {
-    const url = new URL(spec);
-    if (url.protocol === "http:" || url.protocol === "https:")
-      origin = `the API origin you used, probably ${url.origin}`;
-  } catch {
-    // a file path: the origin is in the document
-  }
+export function specArgumentGone(env: NodeJS.ProcessEnv = process.env): string {
+  const address = env.ANYTYPE_API_BASE_URL?.trim()
+    ? "keep your ANYTYPE_API_BASE_URL"
+    : "open the spec and set ANYTYPE_API_BASE_URL to the API origin in its servers[0].url " +
+      "(typically http://127.0.0.1:31009)";
   return (
     "anytype-mcp 3 no longer generates tools from an OpenAPI document. To use the MCP server built into Anytype " +
-    `(heart >= 0.51.6), set ANYTYPE_API_BASE_URL to ${origin}, then remove the spec argument. ` +
+    `(heart >= 0.51.6), ${address}, then remove the spec argument. ` +
     'For an older Anytype, keep your arguments and pin version 2: "-y", "@anyproto/anytype-mcp@2.0.3", "run", <spec>.'
   );
 }
@@ -107,7 +105,7 @@ export async function main(args: string[] = process.argv.slice(2)) {
   }
   const [command, ...rest] = parsed.positional;
   if (!command || command === "run") {
-    runProxy(parsed.tier, rest.length > 0 ? specArgumentGone(rest[0]) : undefined);
+    runProxy(parsed.tier, rest.length > 0 ? specArgumentGone() : undefined);
   } else if (command === "get-key") {
     if (rest.length > 0) {
       // version 2 took a spec here and paired with the server it named; pairing elsewhere would be a surprise

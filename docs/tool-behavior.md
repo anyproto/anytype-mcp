@@ -37,13 +37,13 @@ Anytype's MCP server cannot read or write files on the computer running the MCP 
   - The bytes stream into a hidden temporary file in the directory (mode `0600`). Only a complete file is published under its name, with a hard link, which never replaces an existing file; the next free name is used instead (`report (2).pdf`). A failed download removes its temporary file and nothing else.
   - The directory must be on a filesystem with hard links. On FAT or exFAT, where no atomic, no-replace publish exists, the download fails with that reason and nothing is saved.
   - Names are shortened at character boundaries to fit 255 UTF-8 bytes, including the extension and room for a ` (2)` suffix, and to 120 characters.
-- `upload_local_file` reports success only for Anytype's receipt: HTTP 201 with the stored file's `id`, or for a dry run HTTP 200 with `dry_run: true`. Anything else, such as a proxy's login page or a cut-off body, is reported as an unconfirmed outcome, without quoting it.
+- `upload_local_file` reports success only for Anytype's receipt: HTTP 201 with the stored file's `id`, or for a dry run HTTP 200 with `dry_run: true`. Anything else is reported as an unconfirmed outcome, without quoting it, and the caller is told to check the space before uploading again. That covers a proxy's login page, a cut-off body, or a connection that closes after the file was sent but before Anytype answered. Only a connection that never opened is reported as "cannot reach Anytype".
 
 If Anytype starts serving a tool with one of these names, its version is listed and the local one is not.
 
 ## Errors
 
-- Tool failures come from Anytype as tool results with `isError: true`, with Anytype's message, issues and hints.
+- Tool failures come from Anytype as tool results with `isError: true`, with Anytype's message, issues and hints. Their text is written to be read, not a JSON envelope: unlike 2.x, it cannot be parsed for `status` or `code`. Callers check `isError` first and treat the text as a message.
 - When Anytype cannot be asked at all, the proxy answers itself. That covers Anytype not running, the key rejected (`401`) or refused (`403`), too many calls at once (`429`), a redirect (never followed), and an Anytype without the MCP server (`404`, with the version it needs and the `@2.0.3` pin). On `tools/call` the answer is an `isError` result that tells the model to ask the user; on other methods it is a JSON-RPC error with the same text.
 - An HTTP refusal (any status but 2xx) is never relayed as it came, whatever its shape. Two cases are quoted:
   - Anytype's error JSON, which must carry its `status` with `code` and `message`. Only those fields and each issue's `path` and `message` are kept.

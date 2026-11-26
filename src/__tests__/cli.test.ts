@@ -100,14 +100,21 @@ describe("main", () => {
 });
 
 describe("the retired spec argument", () => {
-  it("names the origin to set before removing it, and the pin that keeps it", async () => {
-    await main(["run", "http://127.0.0.1:31012/v2/docs/openapi.json"]);
+  it("points at the spec's servers[0].url, never guessing from where the spec was served", async () => {
+    await main(["run", "https://docs.example.org/anytype.json"]);
 
     const message = String(started().configError);
-    expect(message).toMatch(
-      /set ANYTYPE_API_BASE_URL to the API origin you used, probably http:\/\/127\.0\.0\.1:31012/,
-    );
+    expect(message).toMatch(/open the spec and set ANYTYPE_API_BASE_URL to the API origin in its servers\[0\]\.url/);
+    expect(message).not.toContain("docs.example.org");
     expect(message).toMatch(/keep your arguments and pin version 2: .*@anyproto\/anytype-mcp@2\.0\.3", "run", <spec>/);
+  });
+
+  it("keeps an ANYTYPE_API_BASE_URL that is already set", async () => {
+    vi.stubEnv("ANYTYPE_API_BASE_URL", "http://127.0.0.1:31012");
+
+    await main(["run", "http://127.0.0.1:31012/v2/docs/openapi.json"]);
+
+    expect(String(started().configError)).toMatch(/keep your ANYTYPE_API_BASE_URL, then remove the spec argument/);
   });
 });
 

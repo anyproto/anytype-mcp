@@ -50,6 +50,26 @@ export interface LocalFileToolsOptions {
 
 class ArgumentError extends Error {}
 class TransferError extends Error {}
+/** fetch failed before any response; code is the system error, when there is one. */
+class NoResponseError extends TransferError {
+  constructor(
+    message: string,
+    readonly code: string | undefined,
+  ) {
+    super(message);
+  }
+}
+
+/** Failures that mean the connection never opened, so nothing was sent. */
+const NEVER_CONNECTED = new Set([
+  "ECONNREFUSED",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "EADDRNOTAVAIL",
+  "UND_ERR_CONNECT_TIMEOUT",
+]);
 
 export class LocalFileTools {
   private readonly baseUrl: string;
@@ -179,14 +199,26 @@ export class LocalFileTools {
     try {
       const form = multipartFile(handle, name);
       const query = args.dry_run === true ? "?dry_run=true" : "";
-      const response = await this.request(`/v2/spaces/${space}/files${query}`, {
-        method: "POST",
-        // a fresh key per call: the proxy does not retry, so it only marks the write
-        headers: { ...this.headers, "Content-Type": form.contentType, "Idempotency-Key": randomUUID() },
-        body: form.body,
-        duplex: "half",
-        signal,
-      });
+      let response: Response;
+      try {
+        response = await this.request(`/v2/spaces/${space}/files${query}`, {
+          method: "POST",
+          // a fresh key per call: the proxy does not retry, so it only marks the write
+          headers: { ...this.headers, "Content-Type": form.contentType, "Idempotency-Key": randomUUID() },
+          body: form.body,
+          duplex: "half",
+          signal,
+        });
+      } catch (error) {
+        // a connection that never opened sent nothing; one lost after that may have stored the file
+        if (error instanceof NoResponseError && !NEVER_CONNECTED.has(error.code ?? "")) {
+          return toolError(
+            "the upload outcome is unconfirmed: the connection to Anytype closed before it answered. " +
+              "Check the space for the file before uploading it again.",
+          );
+        }
+        throw error;
+      }
       if (!response.ok) return toolError(await restError(response, this.redact));
       // a receipt that breaks off is no receipt: the upload may have been stored, so it is
       // reported unconfirmed (check before retrying) rather than as a failed transfer
@@ -218,9 +250,10 @@ export class LocalFileTools {
     } catch (error) {
       if (init.signal?.aborted) throw error;
       const code = networkCode(error);
-      throw new TransferError(
+      throw new NoResponseError(
         `Cannot reach Anytype at ${this.baseUrl}${code ? ` (${code})` : ""}. Ask the user to start the Anytype app; ` +
           "changing the call will not help.",
+        code,
       );
     }
     if (response.status >= 300 && response.status < 400) {

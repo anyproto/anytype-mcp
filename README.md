@@ -170,29 +170,43 @@ Keep the directory to yourself. The checks resolve the path, then open the file,
 Version 3 forwards to Anytype's built-in MCP server instead of generating tools from its OpenAPI document. It needs Node.js 18 or later. The configuration stays the same, but the tools change:
 
 - Tool names lose the `API-` prefix and use underscores: `API-list-spaces` is now `list_spaces`, and `API-create-object` is now `create_object`. Update saved prompts, scripts and host permission rules that name tools. In Claude Code, `mcp__anytype__API-list-spaces` becomes `mcp__anytype__list_spaces`.
-- `create_object` and `create_type` take the document's fields as top-level arguments. There is no `body` wrapper any more:
+- `create_object`, `create_type` and `update_type` take their fields as top-level arguments. There is no `body` wrapper any more:
 
   ```jsonc
   // 2.x: API-create-object
   { "space_id": "…", "body": { "type": "page", "name": "Ideas", "markdown": "First idea" } }
   // 3.x: create_object
   { "space_id": "…", "type": "page", "name": "Ideas", "markdown": "First idea" }
+  // 2.x: API-update-type
+  { "space_id": "…", "type": "task", "body": { "name": "Tasks" } }
+  // 3.x: update_type
+  { "space_id": "…", "type": "task", "name": "Tasks" }
   ```
 
+  Other writes may have changed shape the same way. Check `tools/list` for the exact arguments of your saved calls.
+- Tool errors are results with `isError: true` whose text is written to be read: Anytype's message, issues and repair hints. The text is not a JSON envelope you can parse for `status` or `code`. Check `isError` first, then treat the text as a message.
+
 - `API-upload-file` took a local `file`. Its replacements are `upload_local_file`, which takes a `path` inside the local files directory (see [Local files](#local-files)), and `upload_file`, which takes a web `url` only.
-- `expected_etag` is gone. Targeted edits (`patch_object` and `update_type` ops, property and block changes) are atomic operations, so concurrent edits to different parts no longer overwrite each other. Whole-value fields still replace what is there: `update_type` with `property_definitions` replaces the type's entire field list, so add a single field with the `add_property` op instead:
+- `expected_etag` is gone. Object edits through `patch_object` ops are atomic operations, so concurrent edits to different parts of an object no longer overwrite each other. Types are different:
+  - `update_type` with `property_definitions` replaces the type's whole field list. To add one field without restating the list, use the `add_property` op, as below.
+  - Even its ops rewrite the type's lists on the server, so two concurrent type edits can still undo each other.
+  - A batch that mixes property and view ops can fail after its property changes were written. After a failed mixed batch, read the type again before retrying.
 
   ```jsonc
-  // replaces every field of the type: a field someone else just added is detached
+  // replaces every field of the type with this list
   { "space_id": "…", "type": "task", "property_definitions": [ /* the whole list */ ] }
-  // adds one field and leaves the others alone
+  // adds one field without restating the others
   { "space_id": "…", "type": "task", "ops": [{ "op": "add_property", /* see get_op_schema */ }] }
   ```
 
-  `if_match` is still accepted on the tools that declare it, for callers that hold a value.
+  `if_match` is still accepted on the tools that declare it, `update_type` among them, for callers that hold a value.
 - `request_key` is gone. Anytype adds an idempotency key to every write itself. Only `toggle_chat_reaction` takes one, as `idempotency_key`, so a retried toggle does not undo itself. Anytype generates a fresh key for each MCP call, so if a write's reply is lost, check whether the write landed before repeating it; this matters most for `toggle_chat_reaction`, where a repeat undoes the first toggle.
 - `API-auth-whoami` and `API-publish-chat-status` are no longer offered.
-- `run <openapi-spec>` is gone. The spec chose which server the key went to: its `servers[0].url`. Before removing the spec argument, set `ANYTYPE_API_BASE_URL` to that API origin, for example `http://127.0.0.1:31012`, or version 3 sends your key to the default `http://127.0.0.1:31009`. To keep the 2.x behavior instead, for example with an Anytype older than heart 0.51.6, pin version 2 and keep your arguments as they were:
+- `run <openapi-spec>` is gone. The spec chose which server the key went to: its `servers[0].url`. Before removing the spec argument, check where the key should go:
+  - If `ANYTYPE_API_BASE_URL` is already set, keep it.
+  - Otherwise, open the spec and set `ANYTYPE_API_BASE_URL` to the API origin in its `servers[0].url`. That is typically `http://127.0.0.1:31009`, or `http://127.0.0.1:31012` for anytype-cli.
+
+  Do not use the address the spec was downloaded from, which can be another host. Without the variable, version 3 sends your key to `http://127.0.0.1:31009`. To keep the 2.x behavior instead, for example with an Anytype older than heart 0.51.6, pin version 2 and keep your arguments as they were:
 
   ```json
   { "args": ["-y", "@anyproto/anytype-mcp@2.0.3", "run", "http://127.0.0.1:31012/v2/docs/openapi.json"] }
