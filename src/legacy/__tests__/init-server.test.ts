@@ -2,7 +2,7 @@ import axios from "axios";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { loadOpenApiSpec, ValidationError } from "../../src/init-server";
+import { loadOpenApiSpec, ValidationError } from "../init-server";
 
 // Mock fs and axios
 vi.mock("node:fs");
@@ -286,59 +286,6 @@ describe("loadOpenApiSpec", () => {
       expect(result).toEqual(validOpenApiSpec);
       expect(axios.get).toHaveBeenCalledWith("http://example.com/api-spec.yaml");
     });
-  });
-});
-
-describe("main", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    vi.spyOn(console, "error").mockImplementation(() => {});
-  });
-
-  afterEach(() => {
-    vi.resetAllMocks();
-  });
-
-  it("should run the server when being called without a command", async () => {
-    vi.resetModules();
-    vi.doMock("../../src/init-server", () => ({
-      initProxy: vi.fn().mockResolvedValue(undefined),
-      loadOpenApiSpec: vi.fn().mockResolvedValue(validOpenApiSpec),
-      ValidationError: class ValidationError extends Error {
-        errors: any[];
-        constructor(errors: any[]) {
-          super("OpenAPI validation failed");
-          this.name = "ValidationError";
-          this.errors = errors;
-        }
-      },
-    }));
-
-    const mockExit = vi.spyOn(process, "exit").mockImplementation((() => {}) as any);
-    const { main } = await import("../start-server");
-    await main([]);
-    expect(mockExit).not.toHaveBeenCalled();
-  });
-
-  it("should error on unknown command", async () => {
-    vi.resetModules();
-    vi.doMock("../../src/init-server", () => ({
-      initProxy: vi.fn().mockResolvedValue(undefined),
-      loadOpenApiSpec: vi.fn().mockResolvedValue(validOpenApiSpec),
-      ValidationError: class ValidationError extends Error {
-        errors: any[];
-        constructor(errors: any[]) {
-          super("OpenAPI validation failed");
-          this.name = "ValidationError";
-          this.errors = errors;
-        }
-      },
-    }));
-
-    const mockExit = vi.spyOn(process, "exit").mockImplementation((() => {}) as any);
-    const { main } = await import("../start-server");
-    await main(["unknown"]);
-    expect(mockExit).toHaveBeenCalledWith(1);
   });
 });
 

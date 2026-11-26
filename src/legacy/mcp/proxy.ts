@@ -3,9 +3,9 @@ import { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { CallToolRequestSchema, ListToolsRequestSchema, Tool } from "@modelcontextprotocol/sdk/types.js";
 import { JSONSchema7 as IJsonSchema } from "json-schema";
 import { OpenAPIV3 } from "openapi-types";
+import { determineBaseUrl } from "../../utils/base-url";
 import { HttpClient, HttpClientError } from "../client/http-client";
 import { OpenAPIToMCPConverter } from "../openapi/parser";
-import { determineBaseUrl } from "../utils/base-url";
 import { buildOperationIndex, respellResponse, servesJsonEnvelope, type OperationIndex } from "./see-also";
 import { compactWriteResponse } from "./write-response";
 

@@ -1,39 +1,43 @@
 # MCP tool behavior
 
-## API discovery
+## How it works
 
-At startup the MCP server fetches `/v2/docs/openapi.json`. A `404` or `410` triggers a fallback to `/docs/openapi.json` on the same server. Authentication failures, connection failures, server errors, and invalid specs fail startup. Discovery runs once per process, so restart MCP after upgrading Anytype.
+`anytype-mcp` is a stdio front end for the MCP server built into Anytype. Each JSON-RPC message the MCP client writes to stdin is POSTed to `<base URL>/mcp/<tier>` and Anytype's answer is written back to stdout unchanged. Tools, their descriptions, results and error hints all come from Anytype, so they match the app you run.
 
-To use v1 explicitly with the Desktop API, pass its versioned spec URL:
+- Base URL: `ANYTYPE_API_BASE_URL` (origin only), default `http://127.0.0.1:31009`. `anytype-cli` listens on `31012`.
+- Credentials: the `Authorization` header from `OPENAPI_MCP_HEADERS`. Every call runs as that key, with its scope and space grants. Other headers in that variable are sent too. `Content-Type`, `Accept`, `Mcp-Session-Id` and `MCP-Protocol-Version` are reserved for the transport and are ignored.
+- Tier: `--tier small|large|full`, else `ANYTYPE_MCP_TIER`, else `full`.
 
-```json
-{
-  "args": ["-y", "@anyproto/anytype-mcp", "run", "http://127.0.0.1:31009/v1/docs/openapi.json"]
-}
-```
+## Tiers
 
-Use `/v2/docs/openapi.json` to select v2 explicitly. An explicit URL or local spec file skips fallback. Requests use the routes declared in the selected spec. If two operations produce the same MCP tool name, startup fails with both routes in the error.
+- `full`: one tool per API operation, named by its operation id (`list_spaces`, `create_object`, `patch_object`, `list_chats`, `add_chat_message`, `upload_file`, ...). It keeps no session. Large schemas are served as lookups: `patch_object` and `update_type` take an `ops` list whose members `get_op_schema` describes, and document bodies point at `get_schema`. Anytype leaves out pairing and key management, event streams, typing status, and binary downloads.
+- `small` and `large`: compact task tools (`spaces`, `find`, `read`, `create`, ...) that number results and refer back to them. Anytype keeps those numbers in a session. The proxy opens the session at `initialize`, sends its id with every message, re-opens it if Anytype expires it after 30 idle minutes, and ends it when stdin closes. Numbers from before an expiry are gone, and the tool's error says to search again.
 
-## Inputs and writes
+## Local file tools (full tier)
 
-- Set `Authorization` and `Anytype-Version` in `OPENAPI_MCP_HEADERS`. Header arguments are matched by their OpenAPI parameter location so document fields retain their meaning.
-- Open-ended JSON documents use the `body` argument. Bodies with declared fields use flat arguments. Generated v1 search tools omit the `filters` field.
-- Use `expected_etag` with the etag from a previous read to avoid overwriting a changed object. The wrapper sends it as `If-Match` and surfaces a failed precondition. Response etags appear in `request_metadata`.
-- On endpoints that accept `Idempotency-Key`, omit `request_key` for a new write. The wrapper generates a key and returns it in `request_metadata` or the error's `request_key` field. Reuse it only to retry the same write. Each new write gets a fresh key and the wrapper leaves retries to the caller.
-- Existing clients can use the legacy argument names `If-Match` and `Idempotency-Key`. Conflicting aliases and a global `Idempotency-Key` in `OPENAPI_MCP_HEADERS` are rejected.
+Anytype's MCP server cannot read or write files on the computer running the MCP client, so on `full` the proxy adds two tools it runs itself, with the same key, against Anytype's REST API:
 
-Pagination, field selection, `dry_run`, `create_missing_options`, and schema discovery are available where the selected API exposes them.
+- `upload_local_file` takes `space_id` and an absolute `path` (`~/` is expanded), plus optional `dry_run`. It returns the stored file object, the same as `upload_file`, which takes a `url`.
+- `download_file` takes `space_id` and `file_id`. It streams the file to a private temporary directory (mode `0600`) and returns `path`, `filename`, `media_type` and `size`. The file stays until it is removed or the OS cleans it up.
 
-## Results and tool names
+If Anytype starts serving a tool with one of these names, its version is listed and the local one is not.
 
-Failed tool calls return `isError: true`, the HTTP status when available, and the API's code, message, issues, and hints. Successful v1 object writes and chat creation return a compact receipt with object identity and any write metadata. Read the object to retrieve its content. v2 supplies its own compact write receipts. Reads, searches, and errors retain their API responses.
+## Errors
 
-MCP tool names are derived from OpenAPI operation IDs, such as `list_properties` becoming `API-list-properties`. Tool descriptions and schema field descriptions use those MCP names. Repair hint text refers to MCP tools and their arguments. Typed `see_also` entries keep their REST references and gain `tool` and `args` fields. The wrapper preserves literal values and output schemas. OpenAI and Anthropic tool exports use the original operation IDs.
+- Tool failures come from Anytype as tool results with `isError: true`, with Anytype's message, issues and hints.
+- When Anytype cannot be asked at all, the proxy answers itself: Anytype not running, the key rejected (`401`) or refused (`403`), too many calls at once (`429`), or an Anytype without the MCP server (`404`). On `tools/call` the answer is an `isError` result that tells the model to ask the user. On other methods it is a JSON-RPC error with the same text.
+- `notifications/cancelled` aborts the forwarded HTTP request, and the cancelled call gets no answer.
+- The stdio side answers the protocol revision the client asks for (2024-11-05 through 2025-11-25). Anytype's HTTP server speaks 2025-06-18 and 2025-11-25. The tools are the same in all of them.
 
-## Credentials, streams, and downloads
+## Generated-tools mode (legacy)
 
-- Pairing and API key management belong to the host configuration. Use v2 `API-auth-whoami` to inspect the current key's permissions.
-- MCP excludes event streams. Use the chat message-listing tools for a bounded result.
-- `API-download-file` streams bytes to a private temporary directory and returns `path`, `filename`, `media_type`, and `size`. Paths are local to the host or container running MCP. Completed files remain until removed or cleaned up by the OS. Interrupted downloads are removed. Range and cache headers are managed outside tool inputs.
+Before Anytype served MCP itself, this package generated tools from Anytype's OpenAPI document. That mode remains for one transition period and starts in two cases:
 
-Set `ANYTYPE_MCP_DEBUG=1` to log operation names, status, and timing to stderr. Debug logs omit arguments, authorization headers, payloads, and tool definitions.
+- when a spec is named explicitly, for example `anytype-mcp run http://127.0.0.1:31009/v1/docs/openapi.json`. An explicit URL or file is used as given, and `--tier` does not apply;
+- when Anytype answers `initialize` with a plain `404` because it has no `/mcp` route. The proxy logs the fallback to stderr and loads `/v2/docs/openapi.json`, or `/docs/openapi.json` on older apps.
+
+In this mode, tool names carry an `API-` prefix (`API-list-spaces`). `expected_etag` maps to `If-Match`, and `request_key` is the `Idempotency-Key`, generated when omitted and returned in `request_metadata`. `API-download-file` saves to a temporary file as above, and `API-upload-file` takes a local `file` path. Event streams and pairing are excluded.
+
+## Debugging
+
+Set `ANYTYPE_MCP_DEBUG=1` to log each forwarded method with its HTTP status and timing to stderr. Debug logs omit arguments, headers, payloads and tool definitions.

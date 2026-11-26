@@ -1,7 +1,7 @@
 import { Buffer } from "node:buffer";
 import { readFileSync } from "node:fs";
 import { OpenAPIV3 } from "openapi-types";
-import { OpenAPIToMCPConverter } from "../src/openapi/parser";
+import { OpenAPIToMCPConverter } from "../src/legacy/openapi/parser";
 
 const paths = process.argv.slice(2);
 if (!paths.length)

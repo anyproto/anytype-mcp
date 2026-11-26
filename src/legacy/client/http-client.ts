@@ -5,11 +5,11 @@ import { Headers } from "node-fetch";
 import { randomUUID } from "node:crypto";
 import OpenAPIClientAxios from "openapi-client-axios";
 import type { OpenAPIV3, OpenAPIV3_1 } from "openapi-types";
+import { debug } from "../../utils/debug";
+import { readDownloadError, saveDownload } from "../../utils/download-file";
 import { isFileUploadParameter } from "../openapi/file-upload";
 import { OpenAPIToMCPConverter } from "../openapi/parser";
 import { getParameterPolicy, isFileDownload } from "../openapi/tool-policy";
-import { debug } from "../utils/debug";
-import { readDownloadError, saveDownload } from "./download-file";
 
 export type HttpClientConfig = {
   baseUrl: string;

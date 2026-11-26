@@ -2,7 +2,7 @@
 
 import { readFileSync, writeFileSync } from "fs";
 import { OpenAPIV3 } from "openapi-types";
-import { OpenAPIToMCPConverter } from "../src/openapi/parser";
+import { OpenAPIToMCPConverter } from "../src/legacy/openapi/parser";
 
 function main() {
   const args = process.argv.slice(2);

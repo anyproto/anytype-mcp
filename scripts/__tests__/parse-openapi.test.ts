@@ -1,6 +1,6 @@
 import { OpenAPIV3 } from "openapi-types";
 import { describe, expect, it } from "vitest";
-import { OpenAPIToMCPConverter } from "../../src/openapi/parser";
+import { OpenAPIToMCPConverter } from "../../src/legacy/openapi/parser";
 
 describe("OpenAPI Tool Conversion", () => {
   const sampleSpec: OpenAPIV3.Document = {

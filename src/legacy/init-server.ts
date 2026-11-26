@@ -1,11 +1,18 @@
+// The legacy path: MCP tools generated in this process from Anytype's OpenAPI
+// document. The default path is the thin proxy in src/proxy, which forwards to
+// the MCP server built into Anytype (/mcp/{tier}). This path is reached only
+// when a spec is named explicitly (`anytype-mcp run <spec>`) or when Anytype
+// predates that server; it is kept for the transition and is meant to be
+// deleted as a whole directory (src/legacy) once no supported Anytype lacks
+// /mcp.
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import axios from "axios";
 import fs from "node:fs";
 import path from "node:path";
 import { URL } from "node:url";
 import { OpenAPIV3 } from "openapi-types";
+import { getDefaultSpecUrl } from "../utils/base-url";
 import { MCPProxy } from "./mcp/proxy";
-import { getDefaultSpecUrl } from "./utils/base-url";
 
 export class ValidationError extends Error {
   constructor(public errors: any[]) {
@@ -64,10 +71,15 @@ async function fetchSpec(url: string, fallbackUrl?: string) {
   }
 }
 
+/** The generated-tools server, not yet connected to a transport. */
+export async function createLegacyProxy(specPath?: string): Promise<MCPProxy> {
+  const openApiSpec = await loadOpenApiSpec(specPath);
+  return new MCPProxy("Anytype API", openApiSpec);
+}
+
 export async function initProxy(specPath?: string) {
   console.error("Initializing Anytype MCP Server...");
-  const openApiSpec = await loadOpenApiSpec(specPath);
-  const proxy = new MCPProxy("Anytype API", openApiSpec);
+  const proxy = await createLegacyProxy(specPath);
 
   await proxy.connect(new StdioServerTransport());
   console.error("Anytype MCP Server running on stdio");

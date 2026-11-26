@@ -6,8 +6,8 @@ import { Readable } from "node:stream";
 import { URL } from "node:url";
 import type { OpenAPIV3 } from "openapi-types";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { readDownloadError, saveDownload, type DownloadedFile } from "../../../utils/download-file";
 import { OpenAPIToMCPConverter } from "../../openapi/parser";
-import { readDownloadError, saveDownload, type DownloadedFile } from "../download-file";
 import { HttpClient } from "../http-client";
 
 const directories: string[] = [];

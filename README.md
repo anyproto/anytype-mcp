@@ -7,7 +7,7 @@
 
 The Anytype MCP Server is a [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server enabling AI assistants to seamlessly interact with [Anytype's API](https://github.com/anyproto/anytype-api) through natural language.
 
-It bridges the gap between AI and Anytype's powerful features by converting Anytype's OpenAPI specification into MCP tools, allowing you to manage your knowledge base through conversation.
+Anytype serves MCP itself, from its local API at `http://127.0.0.1:31009/mcp/full`. This package connects MCP clients that can only launch a local command (Claude Desktop, for example) to that server: it forwards each message from stdio to Anytype and passes the answer back. The tools come from the Anytype app you run, so they follow its version.
 
 ## Features
 
@@ -16,6 +16,7 @@ It bridges the gap between AI and Anytype's powerful features by converting Anyt
 - Objects & Lists
 - Properties & Tags
 - Types & Templates
+- Chats & Files
 
 ## Quick Start
 
@@ -137,13 +138,21 @@ Here are some examples of how you can interact with your Anytype:
 - "Create a second one with title 'Dive deep into LLMs' with due date in 3 days and assign it to me"
 - "Now create a collection with the title "Tasks for this week" and add the two tasks to that list. Set due date of the first one to 10 days from now"
 
-## Tool behavior and API versions
+## Tool sets and behavior
 
-MCP uses API v2 by default. If the v2 spec returns `404` or `410`, it falls back to v1 on the same server. Restart the MCP server after upgrading Anytype so it can discover the new API version.
+Anytype serves three tool sets. `full` (the default) has one tool per API operation, named after it (`list_spaces`, `patch_object`, `add_chat_message`). `small` and `large` are compact task-oriented sets meant for smaller models. Choose one with `--tier` or `ANYTYPE_MCP_TIER`:
 
-`API-download-file` saves files on the machine or container running MCP and returns the local path.
+```json
+{
+  "args": ["-y", "@anyproto/anytype-mcp", "--tier", "large"]
+}
+```
 
-See [Tool behavior](docs/tool-behavior.md) for selecting a spec explicitly, retrying writes, and troubleshooting.
+On `full`, two more tools work with files on the computer running MCP: `upload_local_file` uploads a file by its path, and `download_file` saves a file to a private temporary directory and returns its path.
+
+Anytype versions without the built-in MCP server get the tools this package used to generate from Anytype's OpenAPI document instead. Update Anytype to use the built-in server.
+
+See [Tool behavior](docs/tool-behavior.md) for errors, sessions, the generated-tools mode, and troubleshooting.
 
 ## Development
 
