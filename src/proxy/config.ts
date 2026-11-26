@@ -52,8 +52,10 @@ export function isTier(value: string): value is Tier {
  * an error rather than a silent default: the tiers serve different tools.
  */
 export function resolveTier(flag: string | undefined, env: NodeJS.ProcessEnv = process.env): Tier {
+  // an empty --tier= is a mistake (often an unset variable a launcher expanded), not a request for the default
+  if (flag !== undefined && flag.trim() === "") throw new ConfigError("--tier needs a value: small, large or full");
   const [value, source] = flag !== undefined ? [flag, "--tier"] : [env.ANYTYPE_MCP_TIER, "ANYTYPE_MCP_TIER"];
-  if (value === undefined || value === "") return DEFAULT_TIER;
+  if (value === undefined || value.trim() === "") return DEFAULT_TIER;
   const tier = value.trim().toLowerCase();
   if (!isTier(tier)) throw new ConfigError(`${source} must be one of ${TIERS.join(", ")}; got "${value}"`);
   return tier;

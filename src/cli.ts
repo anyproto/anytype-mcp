@@ -56,12 +56,29 @@ function runProxy(tierFlag: string | undefined, configError?: string) {
   if (options.configError) console.error(`Anytype MCP: ${options.configError}`);
   const proxy = startStdioProxy(options);
   const stop = () => {
-    void proxy.abort().finally(() => process.exit(0));
+    // abort stops reading at once, cancels calls in flight, waits for each to
+    // settle (a partial download removes itself) and ends the session; then
+    // whatever is still queued for stdout gets a moment to drain
+    void proxy
+      .abort()
+      .then(drainStdout)
+      .finally(() => process.exit(0));
   };
   process.once("SIGINT", stop);
   process.once("SIGTERM", stop);
   // stdin closing (the host going away) drains the calls received, ends the session, and the process exits
   return proxy;
+}
+
+function drainStdout(): Promise<void> {
+  return new Promise((resolve) => {
+    if (!process.stdout.writableLength) return resolve();
+    const timer = setTimeout(resolve, 1_000);
+    process.stdout.once("drain", () => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
 }
 
 export async function main(args: string[] = process.argv.slice(2)) {
@@ -76,6 +93,14 @@ export async function main(args: string[] = process.argv.slice(2)) {
   if (!command || command === "run") {
     runProxy(parsed.tier, rest.length > 0 ? SPEC_ARGUMENT_GONE : undefined);
   } else if (command === "get-key") {
+    if (rest.length > 0) {
+      // version 2 took a spec here and paired with the server it named; pairing elsewhere would be a surprise
+      console.error(
+        "anytype-mcp get-key takes no spec any more: set ANYTYPE_API_BASE_URL to pair with an Anytype that is not on the default port.",
+      );
+      process.exit(1);
+      return;
+    }
     await new ApiKeyGenerator(resolveBaseUrl()).generateApiKey();
   } else if (command === "help" || command === "--help" || command === "-h") {
     console.error(usage);

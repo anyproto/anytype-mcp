@@ -37,6 +37,11 @@ describe("resolveTier", () => {
       /^ANYTYPE_MCP_TIER must be/,
     );
   });
+
+  it("refuses an empty --tier= rather than overriding ANYTYPE_MCP_TIER with the default", () => {
+    expect(configError(() => resolveTier("", { ANYTYPE_MCP_TIER: "small" }))).toMatch(/--tier needs a value/);
+    expect(configError(() => resolveTier("  ", {}))).toMatch(/--tier needs a value/);
+  });
 });
 
 describe("parseHeaders", () => {

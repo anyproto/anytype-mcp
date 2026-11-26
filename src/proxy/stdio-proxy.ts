@@ -14,7 +14,7 @@
 
 import type { Readable, Writable } from "node:stream";
 import { DEFAULT_BASE_URL, type Tier } from "./config";
-import { describeFailure, HeartClient, idOf, type HeartReply } from "./heart-client";
+import { describeFailure, HeartClient, idOf, initializeSucceeded, type HeartReply } from "./heart-client";
 import {
   classify,
   frameError,
@@ -76,6 +76,10 @@ export class StdioProxy {
   /** Settles once the latest initialize has been answered; everything else waits for it. */
   private ready: Promise<void> = Promise.resolve();
   private readonly work = new Set<Promise<void>>();
+  /** False once shutdown has begun: later frames are dropped, not started. */
+  private accepting = true;
+  /** How the latest initialize went; after a refused one, only ping and initialize are served. */
+  private initialization: "none" | "succeeded" | "failed" = "none";
 
   constructor(
     private readonly options: StdioProxyOptions,
@@ -91,6 +95,7 @@ export class StdioProxy {
    * the same read can look for it.
    */
   receive(line: string): Promise<void> {
+    if (!this.accepting) return Promise.resolve();
     const message = classify(line);
     if (message.kind === "invalid") {
       this.write(frameError(message.id, message.code, message.message));
@@ -115,8 +120,10 @@ export class StdioProxy {
     if (message.kind === "request") {
       const key = idKey(message.id!);
       const controller = new AbortController();
+      // a session reset after this point means the call waited across it
+      const seenResets = this.heart.resets;
       const done = this.ready
-        .then(() => (controller.signal.aborted ? undefined : this.request(message, controller.signal)))
+        .then(() => (controller.signal.aborted ? undefined : this.request(message, controller.signal, seenResets)))
         .finally(() => {
           if (this.pending.get(key)?.controller === controller) this.pending.delete(key);
         });
@@ -144,9 +151,15 @@ export class StdioProxy {
    * removes its partial file and the session is ended.
    */
   async close({ abort = false } = {}): Promise<void> {
+    this.stop();
     if (abort) this.pending.forEach((p) => p.controller.abort());
     await Promise.allSettled([...this.work]);
     await this.heart.close();
+  }
+
+  /** Accepts no further frames; work already accepted carries on. Synchronous, for a signal handler. */
+  stop(): void {
+    this.accepting = false;
   }
 
   private track(promise: Promise<void>): Promise<void> {
@@ -157,6 +170,7 @@ export class StdioProxy {
 
   private async initialize(request: Inbound): Promise<void> {
     const reply = await this.heart.send(request);
+    this.initialization = initializeSucceeded(reply, request.id!) ? "succeeded" : "failed";
     this.relay(request, reply, (result) => {
       if (typeof result.protocolVersion !== "string") return undefined;
       const version = chooseVersion(request.params?.protocolVersion, result.protocolVersion);
@@ -164,14 +178,19 @@ export class StdioProxy {
     });
   }
 
-  private async request(request: Inbound, signal: AbortSignal): Promise<void> {
+  private async request(request: Inbound, signal: AbortSignal, seenResets: number): Promise<void> {
+    if (this.initialization === "failed" && request.method !== "ping") {
+      // a call queued behind a refused initialize must not run (MCP lifecycle)
+      this.fail(request, "initialize did not succeed; send initialize again before other requests");
+      return;
+    }
     const local = this.localCall(request);
     if (local) {
       const result = await local(signal).catch(() => toolError("the local file tool failed"));
       if (!signal.aborted) this.write(frameResult(request.id!, result));
       return;
     }
-    const reply = await this.heart.send(request, signal);
+    const reply = await this.heart.send(request, signal, seenResets);
     // a cancelled request is not answered (MCP cancellation)
     if (signal.aborted) return;
     this.relay(request, reply, request.method === "tools/list" ? (result) => this.withLocalTools(result) : undefined);
@@ -259,22 +278,24 @@ export class StdioProxy {
 
 /**
  * Splits stdin into lines without holding more than maxBytes of one: a longer
- * line is dropped as it streams in and reported once.
+ * line is dropped as it streams in and reported once. stop() takes no
+ * further lines, synchronously.
  */
 export function readLines(
   input: Readable,
   onLine: (line: string) => void,
   onOversized: () => void,
   maxBytes = MAX_MESSAGE_BYTES,
-): Promise<void> {
+): { ended: Promise<void>; stop(): void } {
   let parts: Buffer[] = [];
   let size = 0;
   let dropping = false;
+  let stopped = false;
   const emit = () => {
     const line = Buffer.concat(parts).toString("utf8").replace(/\r$/, "");
-    if (line.trim() !== "") onLine(line);
+    if (!stopped && line.trim() !== "") onLine(line);
   };
-  input.on("data", (data: Buffer | string) => {
+  const onData = (data: Buffer | string) => {
     const chunk = typeof data === "string" ? Buffer.from(data) : data;
     let start = 0;
     for (;;) {
@@ -297,8 +318,9 @@ export function readLines(
       dropping = false;
       start = newline + 1;
     }
-  });
-  return new Promise((resolve) => {
+  };
+  input.on("data", onData);
+  const ended = new Promise<void>((resolve) => {
     const finish = () => {
       if (!dropping && parts.length > 0) emit();
       parts = [];
@@ -307,6 +329,14 @@ export function readLines(
     input.once("end", finish);
     input.once("error", finish);
   });
+  return {
+    ended,
+    stop() {
+      stopped = true;
+      input.off("data", onData);
+      input.pause();
+    },
+  };
 }
 
 export interface StartOptions {
@@ -347,12 +377,21 @@ export function startStdioProxy(options: StartOptions): RunningProxy {
     output.write(line + "\n");
   });
 
-  const ended = readLines(
+  const reader = readLines(
     input,
     (line) =>
       void proxy.receive(line).catch((error) => log(`anytype-mcp: ${error instanceof Error ? error.message : error}`)),
     () => proxy.oversized(),
   );
-  const closed = ended.then(() => proxy.close());
-  return { closed, abort: () => proxy.close({ abort: true }) };
+  let aborted!: () => void;
+  const abortDone = new Promise<void>((resolve) => (aborted = resolve));
+  const abort = async () => {
+    // nothing read after this moment starts: the frames are not even parsed
+    reader.stop();
+    proxy.stop();
+    await proxy.close({ abort: true });
+    aborted();
+  };
+  const closed = Promise.race([reader.ended.then(() => proxy.close()), abortDone]);
+  return { closed, abort };
 }

@@ -180,6 +180,9 @@ export class FakeHeart {
     switch (message.method) {
       case "initialize": {
         const asked = message.params?.protocolVersion;
+        // like Anytype: the session is already minted when the params are refused
+        if (asked !== undefined && typeof asked !== "string")
+          return error(-32602, "initialize params: bad protocolVersion");
         return reply({
           protocolVersion: HTTP_VERSIONS.includes(asked) ? asked : HTTP_VERSIONS[HTTP_VERSIONS.length - 1],
           capabilities: { tools: {} },

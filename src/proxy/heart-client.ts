@@ -15,6 +15,7 @@
 
 import { debug } from "../utils/debug";
 import type { Tier } from "./config";
+import { anytypeError, redactor } from "./errors";
 import { isObject, oneLine, rawMember, sameId, type Inbound, type JsonObject } from "./jsonrpc";
 
 export type HeartFailure =
@@ -54,8 +55,12 @@ export interface HeartClientOptions {
 /** Anytype bounds a call at 60 s itself; this only catches a connection that never answers. */
 export const DEFAULT_TIMEOUT_MS = 120_000;
 const CLOSE_TIMEOUT_MS = 2_000;
-/** Anytype buffers at most 32 MiB of a response; anything past this is not Anytype. */
-const MAX_REPLY_BYTES = 48 << 20;
+/**
+ * Anytype caps the REST body of one call at 32 MiB, and the full tier returns
+ * it twice: JSON-escaped as text content (up to twice its size) and as
+ * structuredContent. 128 MiB holds that worst case with room to spare.
+ */
+const MAX_REPLY_BYTES = 128 << 20;
 /** An error response is read only this far: it is a diagnostic, not content. */
 const MAX_ERROR_BYTES = 64 << 10;
 
@@ -74,6 +79,11 @@ export class HeartClient {
   private initializing?: Promise<unknown>;
   private closing = false;
   private renewals = 0;
+  /** Sessions the proxy opened in place of an expired one. */
+  private resetCount = 0;
+  /** A reset no tool call has been told about yet. */
+  private resetPending = false;
+  private readonly redact: (text: string) => string;
 
   constructor(options: HeartClientOptions) {
     this.baseUrl = options.baseUrl;
@@ -81,6 +91,15 @@ export class HeartClient {
     this.headers = options.headers ?? {};
     this.fetchImpl = options.fetch ?? fetch;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    this.redact = redactor(this.headers);
+  }
+
+  /**
+   * How many times the session was reset. The stdio side reads it when a
+   * request arrives, so a tool call that waited across a reset is refused.
+   */
+  get resets(): number {
+    return this.resetCount;
   }
 
   /** The curated tiers' session, if one is open. */
@@ -96,17 +115,26 @@ export class HeartClient {
   /**
    * Forwards one message. On the curated tiers Anytype ends a session idle for
    * 30 minutes; a stdio client cannot re-initialize, so the proxy opens a new
-   * session with the client's own initialize parameters. A tool call that met
-   * the expired session is not run again: its arguments may name numbered
-   * results of the old session, which in the new one could be other objects.
+   * session with the client's own initialize parameters. Numbered results of
+   * the old session may name other objects in the new one, so no tool call
+   * runs across a reset: the first tool call after it — or one that was
+   * waiting while it happened (seenResets is the count when it arrived) — is
+   * answered sessionExpired instead, whatever message discovered the expiry.
    */
-  async send(message: Inbound, signal?: AbortSignal): Promise<HeartReply> {
+  async send(message: Inbound, signal?: AbortSignal, seenResets = this.resetCount): Promise<HeartReply> {
     if (this.closing) return { kind: "failed", failure: { kind: "closed" } };
     if (message.kind === "request" && message.method === "initialize") return this.initialize(message);
+    const toolCall = message.method === "tools/call";
+    const crossedReset = () => toolCall && (this.resetPending || seenResets !== this.resetCount);
+    const expired = (): HeartReply => {
+      this.resetPending = false;
+      return { kind: "sessionExpired" };
+    };
     if (this.needsSession) {
       const failure = await this.renew();
       if (failure) return { kind: "failed", failure };
     }
+    if (crossedReset()) return expired();
     const sent = this.sessionId;
     const reply = await this.post(message.raw, signal, message.method);
     if (!sent || !sessionGone(reply)) return reply;
@@ -116,8 +144,9 @@ export class HeartClient {
     }
     const failure = await this.renew();
     if (failure) return { kind: "failed", failure };
-    if (message.method === "tools/call") return { kind: "sessionExpired" };
+    if (toolCall) return expired();
     if (signal?.aborted) return { kind: "cancelled" };
+    // anything else is resent; the reset stays pending for the next tool call
     return this.post(message.raw, signal, message.method);
   }
 
@@ -139,10 +168,14 @@ export class HeartClient {
       // a new initialize starts over; the session it replaces is ended, not leaked
       await this.endSession();
       this.needsSession = false;
+      this.resetPending = false;
       this.initializeParams = message.params;
       this.protocolVersion = undefined;
       const reply = await this.post(message.raw, undefined, "initialize");
       if (reply.kind === "messages") this.protocolVersion = answeredVersion(reply.messages, message.id!);
+      // Anytype mints a curated session before it checks the params: a refused
+      // initialize must not leave one behind for later calls to use
+      if (!initializeSucceeded(reply, message.id!)) await this.endSession();
       return reply;
     };
     const running = run();
@@ -171,12 +204,16 @@ export class HeartClient {
     if (reply.kind === "failed") return reply.failure;
     const answer = reply.kind === "messages" ? reply.messages.find((m) => idOf(m) && sameId(idOf(m)!, id)) : undefined;
     if (answer && isObject(answer.parsed.error)) {
-      return { kind: "rejected", message: boundedText(answer.parsed.error.message) ?? "no details" };
+      await this.endSession();
+      const said = boundedText(answer.parsed.error.message);
+      return { kind: "rejected", message: said ? this.redact(said) : "no details" };
     }
     if (!answer || !this.sessionId) {
       return { kind: "unreadable", status: 200, detail: "initialize opened no session" };
     }
     this.needsSession = false;
+    this.resetCount++;
+    this.resetPending = true;
     await this.post('{"jsonrpc":"2.0","method":"notifications/initialized"}');
     return undefined;
   }
@@ -261,7 +298,8 @@ export class HeartClient {
       failure: {
         kind: "http",
         status,
-        message: isObject(json) ? boundedText(json.message) : undefined,
+        // only Anytype's own error shape is quoted, its message bounded and with the key redacted
+        message: anytypeError(json, status, this.redact)?.message,
         routeMissing: status === 404 && json === undefined,
       },
     };
@@ -321,6 +359,17 @@ export function describeFailure(failure: HeartFailure, client: { baseUrl: string
           return `Anytype answered ${said(failure)}`;
       }
   }
+}
+
+/** Whether Anytype answered this initialize with a result (not an error, not an HTTP refusal). */
+export function initializeSucceeded(reply: HeartReply, id: string): boolean {
+  return (
+    reply.kind === "messages" &&
+    reply.messages.some((m) => {
+      const answers = idOf(m);
+      return answers !== undefined && sameId(answers, id) && isObject(m.parsed.result);
+    })
+  );
 }
 
 function sessionGone(reply: HeartReply): boolean {

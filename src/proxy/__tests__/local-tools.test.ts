@@ -1,9 +1,11 @@
+import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { LocalFileTools } from "../local-tools";
+import { safeName } from "../files";
+import { fileName, LocalFileTools } from "../local-tools";
 import { FAKE_KEY, FakeHeart, type FakeHeartOptions } from "./fake-heart";
 
 const auth = { Authorization: `Bearer ${FAKE_KEY}` };
@@ -31,6 +33,11 @@ function text(result: Record<string, any>): string {
   return result.content[0].text;
 }
 
+/** The download request itself (the name lookup comes first). */
+function content() {
+  return heart!.requests.find((r) => r.path.includes("/content"))!;
+}
+
 const pdf = { "file-1": { name: "report.pdf", type: "application/pdf", bytes: Buffer.from("%PDF-1.7 hello") } };
 
 describe("download_file", () => {
@@ -49,8 +56,8 @@ describe("download_file", () => {
     expect(await readFile(join(root, "report.pdf"), "utf8")).toBe("%PDF-1.7 hello");
     expect((await stat(join(root, "report.pdf"))).mode & 0o777).toBe(0o600);
     expect((await stat(root)).mode & 0o777).toBe(0o700);
-    expect(heart!.requests[0]).toMatchObject({ method: "GET", path: "/v2/spaces/space-1/files/file-1/content" });
-    expect(heart!.requests[0].headers.authorization).toBe(`Bearer ${FAKE_KEY}`);
+    expect(content()).toMatchObject({ method: "GET", path: "/v2/spaces/space-1/files/file-1/content" });
+    expect(content().headers.authorization).toBe(`Bearer ${FAKE_KEY}`);
   });
 
   it("takes the extension from the file object's file_ext before the media type", async () => {
@@ -93,8 +100,8 @@ describe("download_file", () => {
 
     expect(result.isError).toBe(true);
     expect(text(result)).toMatch(/expected the whole file \(HTTP 200\), got HTTP 206; nothing was saved/);
-    expect(heart!.requests[0].headers.range).toBeUndefined();
-    expect(heart!.requests[0].headers["if-none-match"]).toBeUndefined();
+    expect(content().headers.range).toBeUndefined();
+    expect(content().headers["if-none-match"]).toBeUndefined();
     await expect(stat(join(root, "report.pdf"))).rejects.toThrow();
   });
 
@@ -103,7 +110,7 @@ describe("download_file", () => {
 
     await local.call("download_file", { space_id: "s", file_id: "file-1", width: 320 });
 
-    expect(heart!.requests[0].path).toBe("/v2/spaces/s/files/file-1/content?width=320");
+    expect(content().path).toBe("/v2/spaces/s/files/file-1/content?width=320");
     expect(text(await local.call("download_file", { space_id: "s", file_id: "file-1", width: -1 }))).toMatch(
       /width must be/,
     );
@@ -120,7 +127,8 @@ describe("download_file", () => {
     const result = await local.call("download_file", { space_id: "s", file_id: "f" });
 
     expect(text(result)).toMatch(/HTTP 302 with a redirect, which is not followed/);
-    expect(heart!.requests).toHaveLength(1);
+    // the name lookup and the download each met the redirect; neither was followed
+    expect(heart!.requests.map((r) => r.path)).toEqual(["/v2/spaces/s/objects/f", "/v2/spaces/s/files/f/content"]);
   });
 
   it("returns Anytype's error envelope in-band", async () => {
@@ -241,5 +249,165 @@ describe("listing", () => {
     expect(listed[0].description).toContain("/data/ai-files");
     expect(local.serves("download_file")).toBe(false);
     expect(local.serves("upload_local_file")).toBe(true);
+  });
+});
+
+describe("download names", () => {
+  it.each([
+    ["report.v2.pdf", "application/pdf", "report.v2.pdf"],
+    ["archive.tar.gz", "application/gzip", "archive.tar.gz"],
+    ["example.cmd.txt", "text/plain", "example.cmd.txt"],
+  ])("joins Anytype's stem and file_ext for %s", async (stored, type, expected) => {
+    const local = await tools({ files: { f: { name: stored, type, bytes: Buffer.from("x") } } });
+
+    const result = await local.call("download_file", { space_id: "s", file_id: "f" });
+
+    expect((result.structuredContent as { filename: string }).filename).toBe(expected);
+  });
+
+  it("uses a Content-Disposition name whole, and the media type's extension only when it is missing", () => {
+    expect(fileName("Q3 report.pdf", { stem: "ignored", ext: ".txt" }, "application/pdf", "id")).toBe("Q3 report.pdf");
+    expect(fileName(undefined, { stem: "notes" }, "text/plain", "id")).toBe("notes.txt");
+    expect(fileName(undefined, { stem: "notes.txt" }, "text/plain", "id")).toBe("notes.txt");
+    expect(fileName(undefined, {}, "application/x-unknown", "bafyid")).toBe("bafyid");
+  });
+
+  it("keeps the extension when it shortens a long name", () => {
+    const name = safeName(`${"a".repeat(300)}.pdf`);
+    expect(name.length).toBeLessThanOrEqual(120);
+    expect(name.endsWith(".pdf")).toBe(true);
+    expect(safeName("CON.txt")).toBe("download.txt");
+  });
+});
+
+describe("download safety", () => {
+  it("shows nothing under the final name until the file is complete", async () => {
+    let seenMidway: string[] = [];
+    const local = await tools({
+      files: pdf,
+      intercept: async (request, res) => {
+        if (!request.path.endsWith("/content")) return false;
+        res.writeHead(200, { "Content-Type": "application/pdf" });
+        res.write("%PDF-1.7 ");
+        await new Promise((resolve) => setTimeout(resolve, 80));
+        seenMidway = await readdir(root);
+        res.end("hello");
+        return true;
+      },
+    });
+
+    const result = await local.call("download_file", { space_id: "s", file_id: "file-1" });
+
+    expect(seenMidway.some((name) => name.startsWith("report"))).toBe(false);
+    expect(seenMidway.some((name) => name.endsWith(".part"))).toBe(true);
+    expect(await readdir(root)).toEqual(["report.pdf"]);
+    expect((result.structuredContent as { size: number }).size).toBe(14);
+  });
+
+  it("removes only its temporary entry when the transfer breaks", async () => {
+    const local = await tools({
+      files: pdf,
+      intercept: async (request, res) => {
+        if (!request.path.endsWith("/content")) return false;
+        res.writeHead(200, { "Content-Type": "application/pdf" });
+        res.write("%PDF");
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        res.destroy();
+        return true;
+      },
+    });
+    await mkdir(root, { recursive: true });
+    await writeFile(join(root, "report.pdf"), "mine");
+
+    const result = await local.call("download_file", { space_id: "s", file_id: "file-1" });
+
+    expect(result.isError).toBe(true);
+    expect(await readdir(root)).toEqual(["report.pdf"]);
+    expect(await readFile(join(root, "report.pdf"), "utf8")).toBe("mine");
+  });
+
+  it("releases the connection when the destination cannot be prepared", async () => {
+    let unfinishedAtClose: boolean | undefined;
+    const local = await tools({
+      files: pdf,
+      intercept: async (request, res) => {
+        if (!request.path.endsWith("/content")) return false;
+        res.on("close", () => (unfinishedAtClose = !res.writableFinished));
+        res.writeHead(200, { "Content-Type": "application/pdf" });
+        res.write("%PDF");
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        if (!res.destroyed) res.end("-1.7 hello");
+        return true;
+      },
+    });
+    await mkdir(root, { recursive: true });
+    await chmod(root, 0o500);
+
+    const result = await local.call("download_file", { space_id: "s", file_id: "file-1" });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await chmod(root, 0o700);
+
+    expect(result.isError).toBe(true);
+    expect(unfinishedAtClose).toBe(true);
+  });
+});
+
+describe("error bodies", () => {
+  it("quotes nothing from a body that is not Anytype's error", async () => {
+    const local = await tools({
+      intercept: (_request, res) => {
+        res
+          .writeHead(502, { "Content-Type": "application/json" })
+          .end(JSON.stringify({ error: "bad gateway", request_headers: { Authorization: `Bearer ${FAKE_KEY}` } }));
+        return true;
+      },
+    });
+
+    const result = await local.call("download_file", { space_id: "s", file_id: "f" });
+
+    expect(text(result)).toBe("Anytype answered HTTP 502");
+  });
+
+  it("keeps Anytype's documented fields only, with the key redacted", async () => {
+    const local = await tools({
+      intercept: (request, res) => {
+        if (!request.path.endsWith("/content")) return false;
+        res.writeHead(404, { "Content-Type": "application/json" }).end(
+          JSON.stringify({
+            status: 404,
+            code: "not_found",
+            message: `no file for Bearer ${FAKE_KEY}`,
+            issues: [{ path: "file_id", message: "unknown id", hint: "x" }],
+            debug: { headers: { Authorization: `Bearer ${FAKE_KEY}` } },
+          }),
+        );
+        return true;
+      },
+    });
+
+    const result = await local.call("download_file", { space_id: "s", file_id: "f" });
+
+    expect(JSON.parse(text(result))).toEqual({
+      status: 404,
+      code: "not_found",
+      message: "no file for [redacted]",
+      issues: [{ path: "file_id", message: "unknown id" }],
+    });
+  });
+});
+
+describe.skipIf(process.platform === "win32")("special files", () => {
+  it("refuses a FIFO without waiting for a writer", async () => {
+    const local = await tools();
+    await mkdir(root, { recursive: true });
+    execFileSync("mkfifo", [join(root, "pipe")]);
+
+    const result = await Promise.race([
+      local.call("upload_local_file", { space_id: "s", path: "pipe" }),
+      new Promise((resolve) => setTimeout(() => resolve("hung"), 2000)),
+    ]);
+
+    expect(result).not.toBe("hung");
+    expect(text(result as Record<string, any>)).toMatch(/is not a regular file/);
   });
 });

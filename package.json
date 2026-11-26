@@ -23,6 +23,9 @@
   "bin": {
     "anytype-mcp": "bin/cli.mjs"
   },
+  "engines": {
+    "node": ">=18"
+  },
   "devDependencies": {
     "@eslint/js": "10.0.1",
     "@modelcontextprotocol/sdk": "1.32.2",

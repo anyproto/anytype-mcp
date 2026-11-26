@@ -7,7 +7,13 @@ const startStdioProxy = vi.fn((_options: Record<string, unknown>) => ({
 
 vi.mock("../proxy/stdio-proxy", () => ({ startStdioProxy }));
 
+const generateApiKey = vi.fn(async () => {});
+vi.mock("../auth/get-key", () => ({
+  ApiKeyGenerator: vi.fn().mockImplementation(() => ({ generateApiKey })),
+}));
+
 const { main, parseArgs } = await import("../cli");
+const { configSnippet } = await vi.importActual<typeof import("../auth/get-key")>("../auth/get-key");
 
 const SECRET = "sk-SENTINEL-42";
 
@@ -59,6 +65,7 @@ describe("main", () => {
   it.each([
     ["an unknown tier", ["--tier", "huge"], {}, /--tier must be one of small, large, full/],
     ["--tier without a value", ["--tier"], {}, /--tier needs a value/],
+    ["an empty --tier=", ["--tier="], { ANYTYPE_MCP_TIER: "small" }, /--tier needs a value/],
     [
       "a spec argument from version 2",
       ["run", "http://127.0.0.1:31009/v1/docs/openapi.json"],
@@ -89,5 +96,27 @@ describe("main", () => {
     await main(["unknown"]);
 
     expect(exit).toHaveBeenCalledWith(1);
+  });
+});
+
+describe("get-key", () => {
+  it("refuses a version-2 spec argument before pairing anywhere", async () => {
+    const exit = vi.spyOn(process, "exit").mockImplementation((() => {}) as any);
+
+    await main(["get-key", "http://127.0.0.1:31012/docs/openapi.json"]);
+
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(generateApiKey).not.toHaveBeenCalled();
+  });
+
+  it("puts a non-default pairing address into the configuration it prints", () => {
+    const remote = configSnippet("key-1", "2025-11-08", "http://127.0.0.1:31012");
+    const local = configSnippet("key-1", "2025-11-08", "http://127.0.0.1:31009");
+
+    expect(remote.mcpServers.anytype.env).toEqual({
+      OPENAPI_MCP_HEADERS: '{"Authorization":"Bearer key-1","Anytype-Version":"2025-11-08"}',
+      ANYTYPE_API_BASE_URL: "http://127.0.0.1:31012",
+    });
+    expect(local.mcpServers.anytype.env).not.toHaveProperty("ANYTYPE_API_BASE_URL");
   });
 });

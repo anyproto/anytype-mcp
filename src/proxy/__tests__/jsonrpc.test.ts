@@ -28,6 +28,12 @@ describe("classify, as Anytype's ClassifyMessage", () => {
     ['{"jsonrpc":"2.0","id":6,"result":1,"error":{}}', -32600, "6", /not both/],
     ['{"jsonrpc":"2.0","id":null,"method":"ping"}', -32600, "null", /string or a number/],
     ['{"jsonrpc":"2.0","id":{"a":1},"method":"ping"}', -32600, "null", /string or a number/],
+    // spellings Anytype's case-insensitive Go decoder would accept as reserved members
+    ['{"jsonrpc":"2.0","ID":2,"method":"tools/call"}', -32600, "null", /"ID" must be spelled "id"/],
+    ['{"jsonrpc":"2.0","id":2,"Method":"tools/call"}', -32600, "null", /"Method" must be spelled "method"/],
+    ['{"JSONRPC":"2.0","id":2,"method":"ping"}', -32600, "null", /must be spelled "jsonrpc"/],
+    ['{"jſonrpc":"2.0","id":2,"method":"ping"}', -32600, "null", /must be spelled "jsonrpc"/],
+    ['{"jsonrpc":"2.0","id":2,"Result":{}}', -32600, "null", /must be spelled "result"/],
   ])("refuses %s", (line, code, id, message) => {
     const result = classify(line);
     expect(result).toMatchObject({ kind: "invalid", code, id });

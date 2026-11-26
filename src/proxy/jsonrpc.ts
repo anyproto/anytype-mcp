@@ -34,6 +34,8 @@ export interface Invalid {
   message: string;
 }
 
+const RESERVED_MEMBERS = new Set(["jsonrpc", "id", "method", "params", "result", "error"]);
+
 export function isObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -57,6 +59,15 @@ export function classify(line: string): Inbound | Invalid {
     return invalid(PARSE_ERROR, "parse JSON-RPC message: not valid JSON");
   }
   if (!isObject(parsed)) return invalid(INVALID_REQUEST, "a JSON-RPC message is an object");
+  // Anytype's Go decoder matches member names case-insensitively, so `ID` would
+  // be its request id while the proxy saw a notification: only the canonical
+  // spelling of a reserved member is accepted
+  for (const key of Object.keys(parsed)) {
+    const folded = key.toLowerCase().replace(/ſ/g, "s");
+    if (RESERVED_MEMBERS.has(folded) && key !== folded) {
+      return invalid(INVALID_REQUEST, `the member ${JSON.stringify(key)} must be spelled "${folded}"`);
+    }
+  }
 
   const idToken = rawMember(raw, "id");
   const usableId = idToken !== undefined && isIdToken(idToken) ? idToken : "null";

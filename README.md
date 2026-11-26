@@ -22,6 +22,8 @@ It needs Anytype with heart 0.51.6 or later, the first version with the built-in
 
 ## Quick Start
 
+You need Node.js 18 or later (for `npx`) and Anytype with heart 0.51.6 or later.
+
 ### 1. Get Your API Key
 
 1. Open Anytype
@@ -156,17 +158,29 @@ See [Tool behavior](docs/tool-behavior.md) for errors, sessions, and troubleshoo
 
 On `full`, two more tools move files between Anytype and the computer running MCP. They use one directory only: `~/.anytype-mcp/files`, created on first use and readable by your user only. Set `ANYTYPE_MCP_FILES_DIR` to an absolute path to use another directory.
 
-- `upload_local_file` uploads a file from that directory. Its `path` is relative to the directory, for example `report.pdf`. Paths outside it are refused, including absolute paths, `..`, and symbolic links that lead out. To upload a file, put it in the directory first.
-- `download_file` saves a file into that directory under a new name, such as `report.pdf` or `report (2).pdf`, and returns the path. It never overwrites an existing file.
+- `upload_local_file` uploads a file from that directory. Its `path` is relative to the directory, for example `report.pdf`. Paths outside it are refused, including absolute paths, `..`, and symbolic links that lead out. Named pipes and other special files are refused too. To upload a file, put it in the directory first.
+- `download_file` saves a file into that directory under the file's name in Anytype, such as `report.pdf`, or `report (2).pdf` if that name is taken, and returns the path. It never overwrites an existing file. A file appears under its name only once it is complete.
 
 `upload_file` uploads from a web URL and needs no local directory.
 
+Keep the directory to yourself. The checks resolve the path, then open the file, so someone else who can write inside the directory could swap a folder in between and point an upload at a file outside it. The default directory is created readable by your user only. Do not point `ANYTYPE_MCP_FILES_DIR` at a folder that others or other programs write to.
+
 ## Upgrading from 2.x
 
-Version 3 forwards to Anytype's built-in MCP server instead of generating tools from its OpenAPI document. The configuration stays the same, but the tools change:
+Version 3 forwards to Anytype's built-in MCP server instead of generating tools from its OpenAPI document. It needs Node.js 18 or later. The configuration stays the same, but the tools change:
 
 - Tool names lose the `API-` prefix and use underscores: `API-list-spaces` is now `list_spaces`, and `API-create-object` is now `create_object`. Update saved prompts, scripts and host permission rules that name tools. In Claude Code, `mcp__anytype__API-list-spaces` becomes `mcp__anytype__list_spaces`.
-- `expected_etag` is now `if_match`.
+- `create_object` and `create_type` take the document's fields as top-level arguments. There is no `body` wrapper any more:
+
+  ```jsonc
+  // 2.x: API-create-object
+  { "space_id": "…", "body": { "type": "page", "name": "Ideas", "markdown": "First idea" } }
+  // 3.x: create_object
+  { "space_id": "…", "type": "page", "name": "Ideas", "markdown": "First idea" }
+  ```
+
+- `API-upload-file` took a local `file`. Its replacements are `upload_local_file`, which takes a `path` inside the local files directory (see [Local files](#local-files)), and `upload_file`, which takes a web `url` only.
+- `expected_etag` is gone. Edits are now atomic operations, so concurrent edits to different parts no longer overwrite each other. `if_match` is still accepted on the tools that declare it, for callers that hold a value.
 - `request_key` is gone. Anytype adds an idempotency key to every write itself. Only `toggle_chat_reaction` takes one, as `idempotency_key`, so a retried toggle does not undo itself.
 - `API-auth-whoami` and `API-publish-chat-status` are no longer offered.
 - `run <openapi-spec>` is gone. To keep the 2.x behavior, for example with an Anytype older than heart 0.51.6, pin version 2: `"args": ["-y", "@anyproto/anytype-mcp@2.0.3"]`.

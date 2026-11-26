@@ -5,7 +5,7 @@
 
 import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { mkdir, open, realpath, unlink, type FileHandle } from "node:fs/promises";
+import { copyFile, link, mkdir, open, realpath, unlink, type FileHandle } from "node:fs/promises";
 import { basename, extname, isAbsolute, join, relative, resolve, sep, win32 } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -59,7 +59,9 @@ export class FilesRoot {
     if (!inside(root, real)) {
       throw new RootError(`${path} links outside ${this.dir}. Ask the user to copy the file itself into ${this.dir}.`);
     }
-    const handle = await open(real, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+    // O_NONBLOCK: opening a FIFO for reading would otherwise wait for a writer,
+    // beyond the reach of cancellation; the descriptor is checked below
+    const handle = await open(real, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
     const info = await handle.stat();
     if (!info.isFile()) {
       await handle.close();
@@ -69,24 +71,31 @@ export class FilesRoot {
   }
 
   /**
-   * Saves a download under the root as a new file named after `name`: an
-   * existing file is never overwritten (create-exclusive, numbered on
-   * collision), and an interrupted transfer leaves nothing behind.
+   * Saves a download under the root as a new file named after `name`. The
+   * bytes go to a private temporary entry first; only a complete file is
+   * published, under a name nothing else holds (an existing file is never
+   * replaced), and a failure removes the temporary entry and nothing else.
+   * The destination is prepared before the body is read, so a caller whose
+   * save fails early still owns the unread body.
    */
   async save(name: string, body: WebReadableStream, signal?: AbortSignal): Promise<{ path: string; size: number }> {
     const root = await this.real();
-    const { handle, path } = await createUnique(root, safeName(name));
+    const temp = join(root, `.anytype-mcp-${randomUUID()}.part`);
+    const handle = await open(temp, "wx", 0o600);
     let size = 0;
     try {
       const counted = Readable.fromWeb(body);
       counted.on("data", (chunk: Buffer) => (size += chunk.length));
       await pipeline(counted, handle.createWriteStream(), { signal });
+      const path = await publish(temp, root, safeName(name));
       // reported under the root as configured, the name the user knows it by
       return { path: join(this.dir, basename(path)), size };
     } catch (error) {
       await handle.close().catch(() => {});
-      await unlink(path).catch(() => {});
       throw error;
+    } finally {
+      // ours by its random name; a published file keeps its own link
+      await unlink(temp).catch(() => {});
     }
   }
 }
@@ -96,30 +105,63 @@ function inside(root: string, path: string): boolean {
   return rel !== "" && rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
 }
 
-async function createUnique(root: string, name: string): Promise<{ handle: FileHandle; path: string }> {
-  const ext = extname(name);
+/**
+ * Gives the finished temporary file its name: a hard link, which is atomic and
+ * fails rather than replace an existing entry; on a filesystem without hard
+ * links, an exclusive copy, which also never replaces one. Numbered on
+ * collision.
+ */
+async function publish(temp: string, root: string, name: string): Promise<string> {
+  const ext = extensionOf(name);
   const stem = name.slice(0, name.length - ext.length) || "download";
-  for (let n = 1; n <= 100; n++) {
-    const path = join(root, n === 1 ? `${stem}${ext}` : `${stem} (${n})${ext}`);
+  const candidates = [`${stem}${ext}`];
+  for (let n = 2; n <= 100; n++) candidates.push(`${stem} (${n})${ext}`);
+  candidates.push(`${stem}-${randomUUID().slice(0, 8)}${ext}`);
+  for (const candidate of candidates) {
+    const path = join(root, candidate);
     try {
-      return { handle: await open(path, "wx", 0o600), path };
+      await link(temp, path);
+      return path;
     } catch (error) {
-      if ((error as { code?: string }).code !== "EEXIST") throw error;
+      if (errorCode(error) === "EEXIST") continue;
+      try {
+        await copyFile(temp, path, constants.COPYFILE_EXCL);
+        return path;
+      } catch (copyError) {
+        if (errorCode(copyError) === "EEXIST") continue;
+        throw copyError;
+      }
     }
   }
-  const path = join(root, `${stem}-${randomUUID().slice(0, 8)}${ext}`);
-  return { handle: await open(path, "wx", 0o600), path };
+  throw new RootError("no free file name for the download");
 }
 
-/** A file name safe on every platform: no separators, no device names, nothing hidden. */
+function errorCode(error: unknown): string | undefined {
+  return (error as { code?: string } | undefined)?.code;
+}
+
+/** A name's extension when it looks like one (`.pdf`, `.gz`), else empty. */
+export function extensionOf(name: string): string {
+  const ext = extname(name);
+  return /^\.[A-Za-z0-9]{1,16}$/.test(ext) ? ext : "";
+}
+
+/**
+ * A file name safe on every platform: no separators, no device names, nothing
+ * hidden, at most 120 characters with the extension kept when shortening.
+ */
 export function safeName(name: string): string {
   const cleaned = name
     // eslint-disable-next-line no-control-regex
     .replace(/[\u0000-\u001f\u007f<>:"/\\|?*]+/g, "_")
-    .replace(/^[\s.]+|[\s.]+$/g, "")
-    .slice(0, 120);
-  if (!cleaned || /^(con|prn|aux|nul|com\d|lpt\d)(\..*)?$/i.test(cleaned)) return "download";
-  return cleaned;
+    .replace(/^[\s.]+|[\s.]+$/g, "");
+  const ext = extensionOf(cleaned);
+  let stem = cleaned
+    .slice(0, cleaned.length - ext.length)
+    .slice(0, 120 - ext.length)
+    .replace(/[\s.]+$/g, "");
+  if (!stem || /^(con|prn|aux|nul|com\d|lpt\d)$/i.test(stem.split(".")[0])) stem = "download";
+  return `${stem}${ext}`;
 }
 
 /**

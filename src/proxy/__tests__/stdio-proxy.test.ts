@@ -220,6 +220,9 @@ describe("stdio proxy refuses what Anytype would refuse, before acting on it", (
     ['{"id":3,"method":"tools/call","params":{"name":"download_file","arguments":{"space_id":"s","file_id":"f"}}}', 3],
     ["{not json", null],
     ['[{"jsonrpc":"2.0","id":5,"method":"ping"}]', null],
+    // Anytype's decoder would take ID as the id and run the call the proxy saw as a notification
+    ['{"jsonrpc":"2.0","ID":6,"method":"tools/call","params":{"name":"list_spaces","arguments":{}}}', null],
+    ['{"jsonrpc":"2.0","id":7,"Method":"tools/call","params":{"name":"list_spaces","arguments":{}}}', null],
   ])("answers %s with an invalid-request error and runs nothing", async (line, id) => {
     const h = await connect();
     await h.initialize();
@@ -278,13 +281,14 @@ describe("stdio proxy cancellation", () => {
   it("aborts a call in flight and does not answer it", async () => {
     let started!: () => void;
     const calling = new Promise<void>((resolve) => (started = resolve));
-    let aborted = false;
+    // closed by the client before the fake had finished answering: 'close' alone also fires after a normal end
+    let closedUnfinished = false;
     const h = await connect({
       heart: {
         intercept: async (request, res) => {
           if (!request.body.toString().includes('"tools/call"')) return false;
           started();
-          res.on("close", () => (aborted = true));
+          res.on("close", () => (closedUnfinished = !res.writableFinished));
           await settle(150);
           if (!res.destroyed)
             res.writeHead(200, { "Content-Type": "application/json" }).end('{"jsonrpc":"2.0","id":2,"result":{}}');
@@ -299,7 +303,7 @@ describe("stdio proxy cancellation", () => {
     h.send({ jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: 2, reason: "user" } });
     await settle(300);
 
-    expect(aborted).toBe(true);
+    expect(closedUnfinished).toBe(true);
     expect(h.received.some((m) => m.id === 2)).toBe(false);
     expect(heart!.posted.map((m) => m.method)).not.toContain("notifications/cancelled");
   });
@@ -423,6 +427,77 @@ describe("stdio proxy on a curated tier", () => {
     expect(h.received.some((m) => m.id === 2)).toBe(false);
     expect(heart!.requests.at(-1)).toMatchObject({ method: "DELETE" });
   });
+});
+
+describe("stdio proxy, round 2 guards", () => {
+  it("tells the next tool call about a reset a ping discovered, and never runs it in the new session", async () => {
+    const call = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "ok" }] });
+    const h = await connect({ tier: "small", heart: { call } });
+    await h.initialize();
+    heart!.expireSessions();
+
+    const pinged = await h.request(2, "ping");
+    const told = await h.request(3, "tools/call", { name: "list_spaces", arguments: {} });
+    const next = await h.request(4, "tools/call", { name: "list_spaces", arguments: {} });
+
+    expect(pinged.result).toEqual({});
+    expect(told.result).toEqual({ content: [{ type: "text", text: SESSION_EXPIRED }], isError: true });
+    expect(call).toHaveBeenCalledTimes(1);
+    expect(next.result.content[0].text).toBe("ok");
+  });
+
+  it("refuses a tool call queued behind a refused initialize, and ends the session Anytype minted", async () => {
+    const call = vi.fn().mockResolvedValue({ content: [] });
+    const h = await connect({ tier: "small", heart: { call } });
+
+    h.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: 42 } });
+    h.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "list_spaces", arguments: {} } });
+    const refused = await h.answer(1);
+    const queued = await h.answer(2);
+
+    expect(refused.error.code).toBe(-32602);
+    expect(queued.result).toMatchObject({
+      isError: true,
+      content: [{ text: expect.stringMatching(/initialize did not succeed/) }],
+    });
+    expect(call).not.toHaveBeenCalled();
+    expect(heart!.sessions.size).toBe(0);
+  });
+
+  it("starts nothing read after a signal, even while shutdown waits on earlier work", async () => {
+    const h = await connect({
+      heart: {
+        intercept: async (request) => {
+          if (request.body.toString().includes("notifications/slow")) await settle(200);
+          return false;
+        },
+      },
+    });
+    await h.initialize();
+    h.send({ jsonrpc: "2.0", method: "notifications/slow" });
+    await settle(30);
+
+    const aborting = h.proxy.abort();
+    h.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "list_spaces", arguments: {} } });
+    await aborting;
+    await settle(50);
+
+    expect(heart!.posted.some((m) => m.method === "tools/call")).toBe(false);
+  });
+
+  it("relays a valid result whose 25 MiB body Anytype carries twice", async () => {
+    const big = "x".repeat(25 * 1024 * 1024);
+    const h = await connect({
+      heart: { call: async () => ({ content: [{ type: "text", text: big }], structuredContent: { body: big } }) },
+    });
+    await h.initialize();
+
+    const answer = await h.request(2, "tools/call", { name: "list_spaces", arguments: {} });
+
+    expect(answer.result.isError).toBeUndefined();
+    expect(answer.result.content[0].text.length).toBe(big.length);
+    expect(answer.result.structuredContent.body.length).toBe(big.length);
+  }, 20_000);
 });
 
 describe("chooseVersion", () => {

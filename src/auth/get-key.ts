@@ -1,4 +1,5 @@
 import * as readline from "node:readline";
+import { DEFAULT_BASE_URL } from "../proxy/config";
 
 /** Pairs with Anytype through the challenge flow and prints an API key with a ready configuration. */
 export class ApiKeyGenerator {
@@ -56,17 +57,26 @@ export class ApiKeyGenerator {
   }
 
   private displaySuccessMessage(apiKey: string, anytypeVersion: string): void {
-    const headers = JSON.stringify({
-      Authorization: `Bearer ${apiKey}`,
-      ...(anytypeVersion ? { "Anytype-Version": anytypeVersion } : {}),
-    });
-    const config = {
-      mcpServers: {
-        anytype: { command: "npx", args: ["-y", "@anyproto/anytype-mcp"], env: { OPENAPI_MCP_HEADERS: headers } },
-      },
-    };
     console.log(`\nYour API KEY: ${apiKey}`);
     console.log("\nAdd this to your MCP settings file as:");
-    console.log(JSON.stringify(config, null, 2));
+    console.log(JSON.stringify(configSnippet(apiKey, anytypeVersion, this.basePath), null, 2));
   }
+}
+
+/**
+ * The host configuration for a key just issued. The key belongs to the
+ * Anytype it was paired with, so a non-default address goes in too: without
+ * it the host would send the key to the default port.
+ */
+export function configSnippet(apiKey: string, anytypeVersion: string, baseUrl: string) {
+  const headers = JSON.stringify({
+    Authorization: `Bearer ${apiKey}`,
+    ...(anytypeVersion ? { "Anytype-Version": anytypeVersion } : {}),
+  });
+  const origin = new URL(baseUrl).origin;
+  const env = {
+    OPENAPI_MCP_HEADERS: headers,
+    ...(origin !== new URL(DEFAULT_BASE_URL).origin ? { ANYTYPE_API_BASE_URL: origin } : {}),
+  };
+  return { mcpServers: { anytype: { command: "npx", args: ["-y", "@anyproto/anytype-mcp"], env } } };
 }

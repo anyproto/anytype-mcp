@@ -6,8 +6,9 @@
 // routes. A tool Anytype starts serving under the same name takes precedence.
 
 import { randomUUID } from "node:crypto";
-import { basename, extname } from "node:path";
+import { basename } from "node:path";
 import type { ReadableStream as WebReadableStream } from "node:stream/web";
+import { anytypeError, redactor } from "./errors";
 import { FilesRoot, multipartFile, RootError } from "./files";
 import { networkCode, readBounded, withDeadline } from "./heart-client";
 import { isObject, toolError, type JsonObject } from "./jsonrpc";
@@ -55,6 +56,7 @@ export class LocalFileTools {
   private readonly headers: Record<string, string>;
   private readonly fetchImpl: typeof fetch;
   private readonly root: FilesRoot;
+  private readonly redact: (text: string) => string;
   private readonly definitions: JsonObject[];
   private active: Set<string>;
 
@@ -63,6 +65,7 @@ export class LocalFileTools {
     this.headers = options.headers ?? {};
     this.fetchImpl = options.fetch ?? fetch;
     this.root = new FilesRoot(options.filesDir);
+    this.redact = redactor(this.headers);
     this.definitions = definitions(options.filesDir);
     this.active = new Set(this.definitions.map((tool) => tool.name as string));
   }
@@ -113,6 +116,8 @@ export class LocalFileTools {
       throw new ArgumentError("width must be a whole number of pixels, or 0 for the original image");
     }
     const query = width !== undefined ? `?width=${width}` : "";
+    // the name is looked up first, so no unread download is held open meanwhile
+    const object = await this.objectName(space, file, signal);
     const headers = Object.fromEntries(Object.entries(this.headers).filter(([name]) => !PARTIAL_HEADERS.test(name)));
     const response = await this.request(`/v2/spaces/${space}/files/${file}/content${query}`, { headers, signal });
     if (response.status !== 200) {
@@ -120,44 +125,48 @@ export class LocalFileTools {
         await response.body?.cancel();
         throw new TransferError(`expected the whole file (HTTP 200), got HTTP ${response.status}; nothing was saved`);
       }
-      return toolError(await restError(response));
+      return toolError(await restError(response, this.redact));
     }
     if (!response.body) throw new TransferError("Anytype sent no file content");
     const mediaType = (response.headers.get("content-type") ?? "application/octet-stream").split(";")[0].trim();
-    const name = await this.fileName(space, file, response.headers.get("content-disposition"), mediaType, signal);
-    const saved = await this.root.save(name, response.body as unknown as WebReadableStream, signal);
+    const disposition = response.headers.get("content-disposition");
+    const name = fileName(
+      disposition ? dispositionName(disposition) : undefined,
+      object,
+      mediaType,
+      decodeURIComponent(file),
+    );
+    let saved: { path: string; size: number };
+    try {
+      saved = await this.root.save(name, response.body as unknown as WebReadableStream, signal);
+    } catch (error) {
+      // the destination could not be prepared, or the transfer broke: release the connection either way
+      await response.body.cancel().catch(() => {});
+      throw error;
+    }
     const receipt = { path: saved.path, filename: basename(saved.path), media_type: mediaType, size: saved.size };
     return { content: [{ type: "text", text: JSON.stringify(receipt) }], structuredContent: receipt };
   }
 
-  /** The stored name: the response's, else the object's (Anytype sends none), else the id; plus an extension. */
-  private async fileName(
-    space: string,
-    file: string,
-    disposition: string | null,
-    mediaType: string,
-    signal: AbortSignal,
-  ) {
-    let name = disposition ? dispositionName(disposition) : undefined;
-    let ext: string | undefined;
-    if (!name) {
-      try {
-        // Anytype's file object is an AnyBlock document: properties.name (no extension) and properties.file_ext
-        const response = await this.request(`/v2/spaces/${space}/objects/${file}`, { headers: this.headers, signal });
-        const object = response.ok ? parseObject((await readBounded(response, MAX_OBJECT_BYTES)) ?? "") : undefined;
-        await response.body?.cancel().catch(() => {});
-        const properties = isObject(object?.properties) ? object.properties : {};
-        if (typeof properties.name === "string" && properties.name.trim()) name = properties.name;
-        if (typeof properties.file_ext === "string" && /^[A-Za-z0-9]{1,10}$/.test(properties.file_ext)) {
-          ext = `.${properties.file_ext}`;
-        }
-      } catch {
-        // a name is a convenience; the id will do
-      }
+  /** The file object's name and extension: an AnyBlock document's properties.name (a stem) and properties.file_ext. */
+  private async objectName(space: string, file: string, signal: AbortSignal): Promise<{ stem?: string; ext?: string }> {
+    try {
+      const response = await this.request(`/v2/spaces/${space}/objects/${file}`, { headers: this.headers, signal });
+      const object = response.ok ? parseObject((await readBounded(response, MAX_OBJECT_BYTES)) ?? "") : undefined;
+      await response.body?.cancel().catch(() => {});
+      const properties = isObject(object?.properties) ? object.properties : {};
+      return {
+        stem: typeof properties.name === "string" && properties.name.trim() ? properties.name : undefined,
+        ext:
+          typeof properties.file_ext === "string" && /^[A-Za-z0-9]{1,16}$/.test(properties.file_ext)
+            ? `.${properties.file_ext}`
+            : undefined,
+      };
+    } catch (error) {
+      if (signal.aborted) throw error;
+      // a name is a convenience; the id will do
+      return {};
     }
-    name ||= decodeURIComponent(file);
-    if (extname(name)) return name;
-    return `${name}${ext ?? EXTENSIONS[mediaType] ?? ""}`;
   }
 
   private async upload(args: JsonObject, signal: AbortSignal): Promise<JsonObject> {
@@ -178,7 +187,7 @@ export class LocalFileTools {
         duplex: "half",
         signal,
       });
-      if (!response.ok) return toolError(await restError(response));
+      if (!response.ok) return toolError(await restError(response, this.redact));
       const text = (await readBounded(response, 1 << 20)) ?? "";
       const parsed = parseObject(text);
       return { content: [{ type: "text", text }], ...(parsed ? { structuredContent: parsed } : {}) };
@@ -288,9 +297,33 @@ function parseObject(text: string): JsonObject | undefined {
   }
 }
 
-/** Anytype's error envelope (message, issues, hints) with the status; another body is not quoted. */
-async function restError(response: Response): Promise<string> {
-  const envelope = parseObject((await readBounded(response, MAX_ERROR_BYTES)) ?? "");
-  if (envelope) return JSON.stringify({ ...envelope, status: response.status });
+/**
+ * A download's file name. A Content-Disposition filename is complete as sent.
+ * Otherwise Anytype's object name is a stem (`report.v2`, `archive.tar`) and
+ * its file_ext the extension, so the two are joined; without file_ext the
+ * media type's usual extension is added unless the stem already ends in it.
+ */
+export function fileName(
+  disposition: string | undefined,
+  object: { stem?: string; ext?: string },
+  mediaType: string,
+  fileId: string,
+): string {
+  if (disposition) return disposition;
+  const stem = object.stem ?? fileId;
+  if (object.ext) return `${stem}${object.ext}`;
+  const usual = EXTENSIONS[mediaType];
+  return usual && !stem.toLowerCase().endsWith(usual) ? `${stem}${usual}` : stem;
+}
+
+/**
+ * Anytype's error (status, code, message, issues) and nothing else: another
+ * server's body is reported by its status only, and the configured
+ * credentials are redacted from whatever is quoted.
+ */
+async function restError(response: Response, redact: (text: string) => string): Promise<string> {
+  const body = parseObject((await readBounded(response, MAX_ERROR_BYTES)) ?? "");
+  const error = anytypeError(body, response.status, redact);
+  if (error) return JSON.stringify({ status: response.status, ...error });
   return `Anytype answered HTTP ${response.status}`;
 }

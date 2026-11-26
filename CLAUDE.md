@@ -42,8 +42,8 @@ Anytype serves MCP itself, from its local API server at `POST /mcp/{small|large|
 
 **HTTP side (`src/proxy/heart-client.ts`)**
 - One POST per message; 202 for notifications; HTTP-level failures (401/403/404/429, unreachable, redirect) are classified and rendered by `describeFailure`
-- Curated tiers: `Mcp-Session-Id` from initialize, sent on every message, renewed once (shared by concurrent calls) after heart expires it; a `tools/call` that met the expired session is NOT replayed (its handles may name other objects) but answered with `SESSION_EXPIRED`; `close()` waits for a pending initialize and DELETEs the session
-- Redirects are never followed; error bodies are read bounded and only heart's own `message` is quoted
+- Curated tiers: `Mcp-Session-Id` from initialize, sent on every message, renewed once (shared by concurrent calls) after heart expires it. No `tools/call` runs across a reset (its handles may name other objects): the reset stays pending until a tool call is answered `SESSION_EXPIRED`, and a call that arrived before the reset (`resets` is snapshotted on receipt) is refused too. A refused initialize ends the session heart minted for it. `close()` waits for a pending initialize and DELETEs the session
+- Redirects are never followed; error bodies are read bounded, and only heart's documented error fields are quoted, with configured credentials redacted (`src/proxy/errors.ts`). The reply bound (128 MiB) covers heart's 32 MiB body carried twice
 
 **stdio side (`src/proxy/stdio-proxy.ts`)**
 - `readLines` frames stdin with heart's 8 MiB limit; `StdioProxy.receive` registers each request synchronously so a `notifications/cancelled` in the same read can stop it
@@ -51,7 +51,7 @@ Anytype serves MCP itself, from its local API server at `POST /mcp/{small|large|
 - On the full tier, appends the local file tools to `tools/list` and dispatches calls to them
 
 **Local file tools (`src/proxy/local-tools.ts`, `src/proxy/files.ts`)**
-- `upload_local_file` and `download_file`, against heart's v2 REST file routes with the caller's key, confined to one root directory (default `~/.anytype-mcp/files`): relative paths only, realpath containment, create-exclusive downloads, whole-file (HTTP 200) only, streaming multipart upload
+- `upload_local_file` and `download_file`, against heart's v2 REST file routes with the caller's key, confined to one root directory (default `~/.anytype-mcp/files`): relative paths only, realpath containment, `O_NOFOLLOW|O_NONBLOCK` and a regular-file check on upload, downloads streamed to a temporary file and published with a no-overwrite hard link (exclusive copy as fallback), named `properties.name` + `file_ext`, whole-file (HTTP 200) only, streaming multipart upload
 - They step aside if heart lists a tool with the same name
 
 ### Key Design Patterns
